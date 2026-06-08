@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in · Finance Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+    <main class="login-card">
+        <div class="login-brand">Finance</div>
+        <p class="login-tagline">Secure sign-in</p>
+
+        <div id="message" class="login-msg" hidden></div>
+
+        <!-- Passkey (primary) -->
+        <button id="passkeyBtn" class="btn btn-primary login-btn" hidden>
+            Sign in with passkey (Touch ID)
+        </button>
+
+        <!-- Password (bootstrap only) -->
+        <form id="pwForm" class="login-form" hidden>
+            <label for="pw">Password</label>
+            <input id="pw" type="password" autocomplete="current-password" required>
+            <button type="submit" class="btn btn-primary login-btn">Sign in</button>
+            <p class="login-hint">First-time setup: sign in, then enrol your passkey.</p>
+        </form>
+
+        <!-- Enrolment prompt (after bootstrap login) -->
+        <div id="enroll" class="login-form" hidden>
+            <p class="login-hint" style="margin-bottom:12px">
+                You're signed in. Enrol this device's passkey to finish — after this,
+                password sign-in is permanently disabled.
+            </p>
+            <button id="enrollBtn" class="btn btn-primary login-btn">Enrol passkey (Touch ID)</button>
+        </div>
+
+        <div id="notSetup" class="login-hint" hidden>
+            No login is configured yet. On the server run
+            <code>python -m backend.auth_setup</code> to set a bootstrap password.
+        </div>
+    </main>
+
+    <script src="/static/js/webauthn.js"></script>
+    <script src="/static/js/login.js"></script>
+</body>
+</html>

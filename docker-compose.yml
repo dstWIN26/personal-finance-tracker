@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/finance.db
+    volumes:
+      - ./data:/app/data        # SQLite DB + sessions + auth state (persist!)
+      - ./keys:/app/keys        # TR device keyfile (gitignored, keep private)
+    expose:
+      - "8000"                  # internal only — never published to the host
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - app
+    environment:
+      - DOMAIN=${RP_ID}                 # e.g. finance.example.com
+      - ACME_EMAIL=${ACME_EMAIL:-}      # optional: email for Let's Encrypt notices
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"                   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data                # persisted TLS certificates
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

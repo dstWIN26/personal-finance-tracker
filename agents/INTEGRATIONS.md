@@ -81,7 +81,17 @@ async def sync_tr_transactions():
 
 ## Revolut Integration
 
-### What's available
+> **⚠️ UPDATED DECISION (supersedes the GoCardless content below):**
+> GoCardless Bank Account Data (Nordigen) **closed new registrations** and is sunsetting
+> its free tier. This project now uses **Salt Edge** (Account Information API v6) instead —
+> a free-tier PSD2 aggregator that supports Revolut. See `backend/integrations/revolut.py`
+> and `revolut_setup.py` for the implementation. Auth = `App-id` + `Secret` headers; flow =
+> create customer → connect session (`POST /connections/connect`) → user authorizes in the
+> Salt Edge widget → list connections/accounts → paginate `GET /transactions`. Env vars:
+> `SALTEDGE_APP_ID`, `SALTEDGE_SECRET`, `SALTEDGE_CUSTOMER_ID`, `SALTEDGE_CONNECTION_ID`.
+> The GoCardless section below is kept for historical reference only.
+
+### What's available (historical — GoCardless)
 Revolut supports **Open Banking (PSD2)** via GoCardless (formerly Nordigen). This is free, official, and requires no special approval — just a free GoCardless account.
 
 **GoCardless Nordigen** acts as the middleware between you and Revolut's bank feeds.

@@ -44,8 +44,11 @@ uvicorn backend.main:app --reload --port 8000
 Copy `.env.example` to `.env`. All required vars:
 
 ```
-TRADE_REPUBLIC_PHONE, TRADE_REPUBLIC_PIN
-GOCARDLESS_SECRET_ID, GOCARDLESS_SECRET_KEY, REVOLUT_ACCOUNT_ID
+TRADE_REPUBLIC_PHONE              # required
+TRADE_REPUBLIC_PIN               # optional — only for one-time pairing, delete after
+TRADE_REPUBLIC_KEYFILE=keys/tr_keyfile.pem
+SALTEDGE_APP_ID, SALTEDGE_SECRET            # required
+SALTEDGE_CUSTOMER_ID, SALTEDGE_CONNECTION_ID  # filled by revolut_setup.py
 EMAIL_FROM, EMAIL_TO, EMAIL_SMTP_PASSWORD
 DASHBOARD_USERNAME, DASHBOARD_PASSWORD
 PORT=8000
@@ -69,8 +72,8 @@ Browser → HTTPS + Basic Auth → FastAPI → SQLite
 - **`main.py`** — FastAPI app entry point; mounts routes, serves `frontend/` as static, starts APScheduler on startup. Auth is `HTTPBasic` via `secrets.compare_digest` against env vars — applied as a dependency on all routers.
 - **`database.py`** — `init_db()` creates all tables; `connect()` is a context manager yielding a `sqlite3.Row`-factory connection with auto-commit.
 - **`config.py`** — loads `.env` and validates required keys at import time.
-- **`integrations/trade_republic.py`** — async functions using `pytr`; throttle to 1 req/sec.
-- **`integrations/revolut.py`** — async `httpx` calls to GoCardless; `categorize()` keyword-maps transaction descriptions to categories.
+- **`integrations/trade_republic.py`** — async functions using `pytr`; throttle to 1 req/sec. Auth via device **keyfile** (`keys/tr_keyfile.pem`), NOT the PIN. Pairing done once via `tr_setup.py`. Errors are logged without credentials/tracebacks.
+- **`integrations/revolut.py`** — async `httpx` calls to the **Salt Edge** Account Information API (v6); paginates transactions per account, records balances, `categorize()` keyword-maps descriptions to categories. Consent set up via `revolut_setup.py`.
 - **`routes/spending.py`** — `/spending`, `/spending/summary`, `/spending/daily`, `/spending/top-merchants`. Expenses are rows where `amount < 0`.
 - **`routes/portfolio.py`** — `/portfolio` returns latest snapshot per ISIN (inner-join on `MAX(fetched_at)`); `/portfolio/top` returns best/worst by `pl_pct`.
 - **`routes/limits.py`** — CRUD for budget limits; `/limits/status` joins live spending to each limit and returns `pct` (spent/limit × 100).
@@ -87,8 +90,8 @@ Browser → HTTPS + Basic Auth → FastAPI → SQLite
 | Weekly portfolio digest (optional) | Cron Mon 08:00 |
 
 ### Frontend (`frontend/`)
-No build step. All JS/CSS loaded from CDN:
-- **Chart.js 4** (bar + line charts), **Alpine.js 3** (reactive state), **Pico.css 2** (classless base).
+No build step. CDN dependencies: **Chart.js 4** + **Alpine.js 3**. Custom dark theme CSS (no framework).
+- Design inspired by Revolut / Trade Republic / Scalable Capital: near-black `#0a0a0a` background, `#141414` cards, Inter font, white pill-button CTAs, green/red for gains/losses.
 - `index.html` — single page with three Alpine-controlled tabs: Spending, Portfolio, Limits.
 - `js/app.js` — `app()` function defines all Alpine state; fetches all backend endpoints on `init()` and re-fetches on filter changes.
 - Charts are rendered by `renderCategoryChart()` and `renderDailyChart()` globals; each call destroys the previous Chart.js instance before creating a new one.
@@ -107,4 +110,5 @@ No build step. All JS/CSS loaded from CDN:
 - **HTTP Basic Auth** — appropriate for a single-user personal app over HTTPS; credentials never stored in DB.
 - **No npm** — Chart.js and Alpine.js load from CDN; no Node.js needed anywhere.
 - **Trade Republic via `pytr`** — unofficial WebSocket reverse-engineering; session saved locally after one-time OTP. Rate-limit to 1 req/sec and avoid polling more often than every 5 minutes.
-- **Revolut via GoCardless** — official PSD2 Open Banking; free tier; 90-day rolling consent must be renewed via the requisition flow in `revolut_setup.py`.
+- **Revolut via Salt Edge** — official PSD2 Open Banking aggregator (free tier); chosen over GoCardless/Nordigen because the latter closed new registrations. Bank-level encryption, bank login never stored by us, consent revocable. Connect-session flow in `revolut_setup.py` writes `SALTEDGE_CUSTOMER_ID` + `SALTEDGE_CONNECTION_ID`; consent must be periodically re-authorized.
+- **Trade Republic credentials** — PIN is never persisted. One-time device pairing (`tr_setup.py`) writes a private keyfile (`keys/`, gitignored, chmod 600) used for all subsequent logins. Credentials are never exposed by any route (API docs disabled) and never written to logs or the DB.

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Finance Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body x-data="app()" x-init="init()" x-cloak>
+
+<!-- ── Top Bar ── -->
+<header class="topbar">
+    <div class="topbar-brand">Finance</div>
+    <nav class="topbar-nav">
+        <a href="#" @click.prevent="tab='overview'"  :class="tab==='overview'  ? 'active' : ''">Overview</a>
+        <a href="#" @click.prevent="tab='spending'"  :class="tab==='spending'  ? 'active' : ''">Spending</a>
+        <a href="#" @click.prevent="tab='portfolio'" :class="tab==='portfolio' ? 'active' : ''">Portfolio</a>
+        <a href="#" @click.prevent="tab='markets'"   :class="tab==='markets'   ? 'active' : ''">Markets</a>
+        <a href="#" @click.prevent="tab='trading'"   :class="tab==='trading'   ? 'active' : ''">Trading</a>
+        <a href="#" @click.prevent="tab='limits'"    :class="tab==='limits'    ? 'active' : ''">Limits</a>
+    </nav>
+    <!-- Global live/pause + feed freshness (governs Markets & Trading polling) -->
+    <button class="live-toggle" @click="toggleLive()"
+            :class="live ? (feedError ? 'err' : 'on') : 'paused'"
+            :aria-label="live ? 'Pause live market data' : 'Resume live market data'"
+            :title="feedAge !== null ? `updated ${feedAge}s ago` : 'market data'">
+        <span class="live-dot"></span>
+        <span x-text="live ? (feedError ? 'Error' : 'Live') : 'Paused'"></span>
+    </button>
+    <button class="icon-btn" @click="addPasskey()" title="Enrol another passkey">+ Passkey</button>
+    <button class="icon-btn" @click="logout()" title="Sign out">Sign out</button>
+</header>
+
+<main class="container">
+
+    <!-- Error -->
+    <div x-show="error" class="error-banner" x-text="error"></div>
+
+    <!-- ═══════════════ OVERVIEW ═══════════════ -->
+    <section x-show="tab === 'overview'">
+        <div class="section-header">
+            <h2>Overview</h2>
+            <div class="month-total-label" x-text="`as of ${nowLabel()}`"></div>
+        </div>
+
+        <!-- Net worth hero + today -->
+        <div class="overview-top">
+            <div class="card hero-card">
+                <div class="card-header">Net worth</div>
+                <div class="hero-value num" x-text="eur(ov.net_worth)"></div>
+                <div class="hero-sub">
+                    <span :class="ov.invested_pl >= 0 ? 'positive' : 'negative'"
+                          x-text="`${ov.invested_pl >= 0 ? '▲' : '▼'} ${eur(Math.abs(ov.invested_pl))} unrealised P&L`"></span>
+                </div>
+                <div class="chart-wrap" style="height:90px;margin-top:8px">
+                    <canvas id="netWorthSpark" height="90"></canvas>
+                </div>
+            </div>
+            <div class="card today-card">
+                <div class="card-header">Snapshot</div>
+                <div class="kv"><span>Invested</span><span class="num" x-text="eur(ov.invested)"></span></div>
+                <div class="kv"><span>Cash</span><span class="num" x-text="eur(ov.cash)"></span></div>
+                <div class="kv"><span>Spent today</span><span class="num negative" x-text="`−${eur(ov.today_spend)}`"></span></div>
+            </div>
+        </div>
+
+        <!-- Allocation + accounts -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">Allocation</div>
+                <div class="alloc-wrap">
+                    <div class="chart-wrap" style="width:160px;height:160px">
+                        <canvas id="allocChart"></canvas>
+                    </div>
+                    <div class="alloc-legend">
+                        <div class="legend-row"><span class="dot" style="background:var(--green)"></span>Invested
+                            <span class="num" x-text="pct(ov.invested, ov.net_worth)"></span></div>
+                        <div class="legend-row"><span class="dot" style="background:var(--text-secondary)"></span>Cash
+                            <span class="num" x-text="pct(ov.cash, ov.net_worth)"></span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">Accounts</div>
+                <template x-for="a in ov.accounts" :key="a.source">
+                    <div class="account-block">
+                        <div class="account-name" x-text="a.label"></div>
+                        <div class="kv" x-show="a.invested > 0"><span>Invested</span>
+                            <span class="num" x-text="eur(a.invested)"></span></div>
+                        <div class="kv"><span>Cash</span><span class="num" x-text="eur(a.cash)"></span></div>
+                    </div>
+                </template>
+                <div x-show="ov.accounts.length === 0" class="empty-state">No account data yet</div>
+            </div>
+        </div>
+
+        <!-- Recent unified activity -->
+        <div class="card">
+            <div class="card-header">
+                <span>Recent activity</span>
+                <a href="#" class="link-more" @click.prevent="tab='spending'">View all →</a>
+            </div>
+            <table>
+                <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th style="text-align:right">Amount</th></tr></thead>
+                <tbody>
+                    <template x-for="tx in ov.recent" :key="tx.id">
+                        <tr>
+                            <td style="white-space:nowrap" x-text="tx.date"></td>
+                            <td x-text="tx.description || '—'"></td>
+                            <td><span class="tag" x-text="tx.category || 'other'"></span></td>
+                            <td style="color:var(--text-secondary)" x-text="tx.source === 'revolut' ? 'Revolut' : 'Trade Republic'"></td>
+                            <td class="num" style="text-align:right;font-weight:500"
+                                :class="tx.amount < 0 ? 'negative' : 'positive'"
+                                x-text="`${tx.amount < 0 ? '−' : '+'}${eur(Math.abs(tx.amount))}`"></td>
+                        </tr>
+                    </template>
+                    <tr x-show="ov.recent.length === 0"><td colspan="5" class="empty-state">No activity yet</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ═══════════════ SPENDING ═══════════════ -->
+    <section x-show="tab === 'spending'">
+
+        <!-- Header + Month Total -->
+        <div class="section-header">
+            <div>
+                <h2>Spending</h2>
+            </div>
+            <div style="text-align:right">
+                <div class="month-total-label">Month to date</div>
+                <div class="month-total" x-text="`&euro;${monthTotal.toFixed(2)}`"></div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filter-row">
+            <div>
+                <label>Month</label>
+                <input type="month" x-model="filters.month" @change="loadSpending()">
+            </div>
+            <div>
+                <label>Category</label>
+                <select x-model="filters.category" @change="loadSpending()">
+                    <option value="">All</option>
+                    <template x-for="cat in categories" :key="cat">
+                        <option :value="cat" x-text="cat"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label>Account</label>
+                <select x-model="filters.source" @change="loadSpending()">
+                    <option value="">All</option>
+                    <option value="revolut">Revolut</option>
+                    <option value="trade_republic">Trade Republic</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">By Category</div>
+                <div class="chart-wrap"><canvas id="categoryChart" height="220"></canvas></div>
+            </div>
+            <div class="card">
+                <div class="card-header">Daily Trend</div>
+                <div class="chart-wrap"><canvas id="dailyChart" height="220"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Top Merchants -->
+        <div class="card">
+            <div class="card-header">Top Merchants</div>
+            <table>
+                <thead><tr><th>Merchant</th><th>Txns</th><th style="text-align:right">Total</th></tr></thead>
+                <tbody>
+                    <template x-for="m in topMerchants" :key="m.description">
+                        <tr>
+                            <td x-text="m.description || 'Unknown'"></td>
+                            <td x-text="m.count"></td>
+                            <td style="text-align:right;font-weight:500" x-text="`&euro;${m.total.toFixed(2)}`"></td>
+                        </tr>
+                    </template>
+                    <tr x-show="topMerchants.length === 0">
+                        <td colspan="3" class="empty-state">No data yet</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- All Transactions -->
+        <div class="card">
+            <div class="card-header">
+                <span>Transactions</span>
+                <div class="inline-filters">
+                    <input type="number" placeholder="Min &euro;" x-model="filters.min" @change="loadSpending()">
+                    <input type="number" placeholder="Max &euro;" x-model="filters.max" @change="loadSpending()">
+                </div>
+            </div>
+
+            <div x-show="loading" class="loading-state">Loading&hellip;</div>
+
+            <table x-show="!loading">
+                <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th style="text-align:right">Amount</th></tr></thead>
+                <tbody>
+                    <template x-for="tx in transactions" :key="tx.id">
+                        <tr>
+                            <td style="white-space:nowrap" x-text="tx.date"></td>
+                            <td x-text="tx.description || '&mdash;'"></td>
+                            <td><span class="tag" x-text="tx.category || 'other'"></span></td>
+                            <td style="color:var(--text-secondary)" x-text="tx.source === 'revolut' ? 'Revolut' : 'Trade Republic'"></td>
+                            <td style="text-align:right;font-weight:500"
+                                :class="tx.amount < 0 ? 'negative' : 'positive'"
+                                x-text="`&euro;${Math.abs(tx.amount).toFixed(2)}`"></td>
+                        </tr>
+                    </template>
+                    <tr x-show="!loading && transactions.length === 0">
+                        <td colspan="5" class="empty-state">No transactions yet</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ═══════════════ PORTFOLIO ═══════════════ -->
+    <section x-show="tab === 'portfolio'">
+
+        <div class="section-header">
+            <h2>Portfolio</h2>
+        </div>
+
+        <!-- Totals -->
+        <div class="grid-2" style="margin-bottom:16px">
+            <div class="stat-card">
+                <div class="stat-label">Total Value</div>
+                <div class="stat-value" x-text="portfolio.total_value != null ? `&euro;${portfolio.total_value.toFixed(2)}` : '&mdash;'"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total P&amp;L</div>
+                <div class="stat-value"
+                     :class="(portfolio.total_pl || 0) >= 0 ? 'positive' : 'negative'"
+                     x-text="portfolio.total_pl != null ? `&euro;${portfolio.total_pl.toFixed(2)}` : '&mdash;'"></div>
+            </div>
+        </div>
+
+        <!-- Best / Worst -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">Best Performers</div>
+                <table>
+                    <thead><tr><th>Name</th><th style="text-align:right">P&amp;L %</th><th style="text-align:right">P&amp;L &euro;</th></tr></thead>
+                    <tbody>
+                        <template x-for="p in topPerformers.best" :key="p.isin">
+                            <tr>
+                                <td x-text="p.name"></td>
+                                <td style="text-align:right" class="positive" x-text="`+${(p.pl_pct||0).toFixed(2)}%`"></td>
+                                <td style="text-align:right" class="positive" x-text="`+&euro;${(p.pl_eur||0).toFixed(2)}`"></td>
+                            </tr>
+                        </template>
+                        <tr x-show="topPerformers.best.length===0">
+                            <td colspan="3" class="empty-state">No data yet</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <div class="card-header">Worst Performers</div>
+                <table>
+                    <thead><tr><th>Name</th><th style="text-align:right">P&amp;L %</th><th style="text-align:right">P&amp;L &euro;</th></tr></thead>
+                    <tbody>
+                        <template x-for="p in topPerformers.worst" :key="p.isin">
+                            <tr>
+                                <td x-text="p.name"></td>
+                                <td style="text-align:right" class="negative" x-text="`${(p.pl_pct||0).toFixed(2)}%`"></td>
+                                <td style="text-align:right" class="negative" x-text="`&euro;${(p.pl_eur||0).toFixed(2)}`"></td>
+                            </tr>
+                        </template>
+                        <tr x-show="topPerformers.worst.length===0">
+                            <td colspan="3" class="empty-state">No data yet</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- All Positions -->
+        <div class="card">
+            <div class="card-header">All Positions</div>
+            <table>
+                <thead><tr>
+                    <th>Name</th><th style="text-align:right">Qty</th><th style="text-align:right">Buy</th>
+                    <th style="text-align:right">Current</th><th style="text-align:right">P&amp;L %</th><th style="text-align:right">P&amp;L &euro;</th>
+                </tr></thead>
+                <tbody>
+                    <template x-for="p in portfolio.positions" :key="p.isin">
+                        <tr>
+                            <td x-text="p.name"></td>
+                            <td style="text-align:right" x-text="p.quantity"></td>
+                            <td style="text-align:right" x-text="p.buy_price!=null ? `&euro;${p.buy_price.toFixed(2)}` : '&mdash;'"></td>
+                            <td style="text-align:right" x-text="p.current_price!=null ? `&euro;${p.current_price.toFixed(2)}` : '&mdash;'"></td>
+                            <td style="text-align:right" :class="(p.pl_pct||0)>=0?'positive':'negative'"
+                                x-text="`${(p.pl_pct||0).toFixed(2)}%`"></td>
+                            <td style="text-align:right" :class="(p.pl_eur||0)>=0?'positive':'negative'"
+                                x-text="`&euro;${(p.pl_eur||0).toFixed(2)}`"></td>
+                        </tr>
+                    </template>
+                    <tr x-show="(portfolio.positions||[]).length===0">
+                        <td colspan="6" class="empty-state">No positions yet</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ═══════════════ LIMITS ═══════════════ -->
+    <section x-show="tab === 'limits'">
+
+        <div class="section-header">
+            <h2>Budget Limits</h2>
+        </div>
+
+        <!-- Add New Limit -->
+        <div class="card">
+            <div class="card-header">New Limit</div>
+            <div class="grid-3">
+                <div>
+                    <label>Category (blank = total)</label>
+                    <input type="text" placeholder="e.g. food" x-model="newLimit.category">
+                </div>
+                <div>
+                    <label>Monthly limit (&euro;)</label>
+                    <input type="number" placeholder="400" x-model="newLimit.amount" min="1">
+                </div>
+                <div style="display:flex;align-items:flex-end">
+                    <button class="btn btn-primary" style="width:100%" @click="saveLimit()">Add Limit</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Empty -->
+        <div x-show="limitsStatus.length===0" class="empty-state">
+            No budget limits set yet.
+        </div>
+
+        <!-- Limit Cards -->
+        <template x-for="lim in limitsStatus" :key="lim.id">
+            <div class="card">
+                <div class="card-header">
+                    <span x-text="lim.category ? lim.category.toUpperCase() : 'TOTAL SPENDING'"></span>
+                    <button class="btn btn-ghost btn-sm" @click="deleteLimit(lim.id)">Remove</button>
+                </div>
+                <div class="limit-row">
+                    <span style="font-weight:500" x-text="`&euro;${lim.spent.toFixed(2)} / &euro;${lim.amount.toFixed(2)}`"></span>
+                    <span :class="lim.pct >= 100 ? 'alert-red' : lim.pct >= 80 ? 'alert-yellow' : ''"
+                          style="font-weight:600;font-size:0.95rem"
+                          x-text="`${lim.pct}%`"></span>
+                </div>
+                <div class="limit-bar-track">
+                    <div class="limit-bar-fill"
+                         :class="lim.pct >= 100 ? 'exceeded' : lim.pct >= 80 ? 'warning' : ''"
+                         :style="`width:${Math.min(lim.pct, 100)}%`"></div>
+                </div>
+                <small x-show="lim.pct >= 100" class="limit-alert alert-red">Limit exceeded &mdash; email alert sent</small>
+                <small x-show="lim.pct >= 80 && lim.pct < 100" class="limit-alert alert-yellow">80% threshold reached</small>
+            </div>
+        </template>
+    </section>
+
+    <!-- ═══════════════ MARKETS ═══════════════ -->
+    <section x-show="tab === 'markets'">
+        <div class="section-header">
+            <h2>Markets</h2>
+            <div class="month-total-label" x-text="feedAge !== null ? `updated ${feedAge}s ago` : ''"></div>
+        </div>
+
+        <!-- Ticker tape (decorative; data repeated in cards below) -->
+        <div class="ticker" aria-hidden="true" x-show="indices.length">
+            <div class="ticker-track">
+                <template x-for="(q, idx) in [...indices, vix, ...indices]" :key="idx">
+                    <span class="ticker-item" x-show="q && q.price != null">
+                        <span x-text="q && q.name"></span>
+                        <span class="num" x-text="q && fmt(q.price)"></span>
+                        <span class="num" :class="q && q.change_pct >= 0 ? 'positive' : 'negative'"
+                              x-text="q && signPct(q.change_pct)"></span>
+                    </span>
+                </template>
+            </div>
+        </div>
+
+        <div class="markets-top">
+            <!-- VIX -->
+            <div class="card vix-card">
+                <div class="card-header">Volatility · VIX</div>
+                <div x-show="!vix" class="skeleton" style="height:120px"></div>
+                <template x-if="vix">
+                    <div>
+                        <div class="vix-value num" :class="vixZone(vix.price)" x-text="fmt(vix.price)"></div>
+                        <div class="vix-sub" :class="vix.change_pct >= 0 ? 'negative' : 'positive'"
+                             x-text="`${signPct(vix.change_pct)} · ${vixLabel(vix.price)}`"></div>
+                        <div class="vix-gauge">
+                            <div class="vix-gauge-fill" :style="`width:${Math.min(vix.price/50*100,100)}%`"
+                                 :class="vixZone(vix.price)"></div>
+                        </div>
+                        <div class="vix-scale"><span>0</span><span>20</span><span>30</span><span>50+</span></div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Indices -->
+            <div class="card">
+                <div class="card-header">Major indices</div>
+                <div x-show="!indices.length" class="skeleton" style="height:160px"></div>
+                <div class="index-list">
+                    <template x-for="q in indices" :key="q.symbol">
+                        <button class="index-row" @click="openTrading(q.symbol)">
+                            <span class="index-name" x-text="q.name"></span>
+                            <span class="index-spark"><canvas :id="`spark-${q.symbol}`" width="80" height="28"></canvas></span>
+                            <span class="index-price num" x-text="fmt(q.price)"></span>
+                            <span class="index-chg num" :class="q.change_pct >= 0 ? 'positive' : 'negative'"
+                                  x-text="signPct(q.change_pct)"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bonds / rates -->
+        <div class="card">
+            <div class="card-header">Bonds &amp; rates</div>
+            <div x-show="!bonds.us" class="skeleton" style="height:120px"></div>
+            <div class="bonds-wrap" x-show="bonds.us">
+                <table class="bonds-table">
+                    <thead><tr><th>Govt yield</th><th class="num">2Y</th><th class="num">5Y</th><th class="num">10Y</th><th class="num">30Y</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>United States</td>
+                            <td class="num" x-text="bp(bonds.us && bonds.us.tenors['2Y'])"></td>
+                            <td class="num" x-text="bp(bonds.us && bonds.us.tenors['5Y'])"></td>
+                            <td class="num" x-text="bp(bonds.us && bonds.us.tenors['10Y'])"></td>
+                            <td class="num" x-text="bp(bonds.us && bonds.us.tenors['30Y'])"></td>
+                        </tr>
+                        <tr>
+                            <td>Euro area (AAA)</td>
+                            <td class="num" x-text="bp(bonds.eu && bonds.eu.tenors['2Y'])"></td>
+                            <td class="num" x-text="bp(bonds.eu && bonds.eu.tenors['5Y'])"></td>
+                            <td class="num" x-text="bp(bonds.eu && bonds.eu.tenors['10Y'])"></td>
+                            <td class="num" x-text="bp(bonds.eu && bonds.eu.tenors['30Y'])"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="spreads">
+                    <div class="spread-chip">
+                        <span class="spread-label">US 2s10s</span>
+                        <span class="num" :class="(bonds.spreads && bonds.spreads.us_10y_minus_2y) < 0 ? 'negative' : 'positive'"
+                              x-text="bpDelta(bonds.spreads && bonds.spreads.us_10y_minus_2y)"></span>
+                        <span class="spread-note" x-show="(bonds.spreads && bonds.spreads.us_10y_minus_2y) < 0">inverted</span>
+                    </div>
+                    <div class="spread-chip">
+                        <span class="spread-label">US − EU 10Y</span>
+                        <span class="num positive" x-text="bpDelta(bonds.spreads && bonds.spreads.us_minus_eu_10y)"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sector heatmap -->
+        <div class="card">
+            <div class="card-header">Sectors today</div>
+            <div x-show="!heatmap.length" class="skeleton" style="height:80px"></div>
+            <div class="heatmap">
+                <template x-for="s in heatmap" :key="s.symbol">
+                    <div class="heat-tile" :style="`background:${heatColor(s.change_pct)}`">
+                        <span class="heat-name" x-text="s.name"></span>
+                        <span class="heat-val num" x-text="signPct(s.change_pct)"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════ TRADING ═══════════════ -->
+    <section x-show="tab === 'trading'">
+        <div class="section-header">
+            <h2>Trading</h2>
+            <div class="month-total-label" x-text="feedAge !== null ? `updated ${feedAge}s ago` : ''"></div>
+        </div>
+
+        <div class="trading-layout">
+            <!-- Watchlist -->
+            <div class="card watchlist">
+                <div class="card-header">Watchlist</div>
+                <template x-for="q in watchlist" :key="q.symbol">
+                    <button class="watch-row" :class="q.symbol === activeSymbol ? 'active' : ''"
+                            @click="selectSymbol(q.symbol)">
+                        <span class="watch-name" x-text="q.name"></span>
+                        <span class="num" :class="q.change_pct >= 0 ? 'positive' : 'negative'"
+                              x-text="signPct(q.change_pct)"></span>
+                    </button>
+                </template>
+                <div x-show="!watchlist.length" class="empty-state">Loading…</div>
+            </div>
+
+            <!-- Main chart -->
+            <div class="card chart-main">
+                <div class="instrument-head" x-show="active">
+                    <div>
+                        <div class="instrument-name">
+                            <span x-text="active && active.name"></span>
+                            <span class="instrument-sym" x-text="active && active.symbol"></span>
+                        </div>
+                        <div class="instrument-price num" x-text="active && fmt(active.price)"></div>
+                        <div class="num" :class="active && active.change >= 0 ? 'positive' : 'negative'"
+                             x-text="active ? `${active.change >= 0 ? '▲' : '▼'} ${fmt(Math.abs(active.change))} (${signPct(active.change_pct)})` : ''"></div>
+                    </div>
+                    <div class="timeframes">
+                        <template x-for="r in ['1d','5d','1mo','3mo','1y','max']" :key="r">
+                            <button class="tf-btn" :class="r === range ? 'active' : ''"
+                                    @click="setRange(r)" x-text="r.toUpperCase()"></button>
+                        </template>
+                    </div>
+                </div>
+                <div class="ohlc-strip num" x-show="active && active.meta">
+                    <span>O <b x-text="active && active.meta && fmt(active.meta.price)"></b></span>
+                    <span>H <b x-text="active && active.meta && fmt(active.meta.day_high)"></b></span>
+                    <span>L <b x-text="active && active.meta && fmt(active.meta.day_low)"></b></span>
+                    <span>Prev <b x-text="active && active.meta && fmt(active.meta.prev_close)"></b></span>
+                </div>
+                <div class="chart-wrap" style="height:360px"><canvas id="candleChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Context rail -->
+        <div class="card context-rail" x-show="active">
+            <div class="ctx-item"><span>VIX</span><b class="num" x-text="vix && fmt(vix.price)"></b></div>
+            <div class="ctx-item"><span>US 2s10s</span><b class="num" x-text="bpDelta(bonds.spreads && bonds.spreads.us_10y_minus_2y)"></b></div>
+            <div class="ctx-item"><span>US−EU 10Y</span><b class="num" x-text="bpDelta(bonds.spreads && bonds.spreads.us_minus_eu_10y)"></b></div>
+            <div class="ctx-item ctx-range" x-show="active && active.meta">
+                <span>52-week range</span>
+                <div class="range-bar"><div class="range-dot" :style="`left:${range52(active && active.meta)}%`"></div></div>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<!-- Candlestick support (no build step — CDN UMD): luxon → adapter → financial plugin -->
+<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+<script src="/static/js/webauthn.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

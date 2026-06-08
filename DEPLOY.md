@@ -1,0 +1,82 @@
+# Deploying (VPS + Caddy, automatic HTTPS)
+
+This app is a single always-on container: FastAPI + an in-process scheduler +
+SQLite + a Trade Republic keyfile on disk. It runs behind **Caddy**, which gets
+and renews a Let's Encrypt certificate automatically. Login is a **hardware
+passkey** (Touch ID) after a one-time bootstrap password.
+
+## 0. Prerequisites
+- A small VPS (e.g. Hetzner CX22 / DigitalOcean) running Linux with Docker + the
+  Docker Compose plugin.
+- A domain name with an **A/AAAA record pointing at the VPS IP** (e.g.
+  `finance.yourdomain.com`). Passkeys and Secure cookies require real HTTPS, so a
+  domain is mandatory — you cannot use a bare IP.
+- Ports **80** and **443** open in the firewall.
+
+## 1. Get the code + configure
+```bash
+git clone https://github.com/dstWIN26/personal-finance-tracker.git
+cd personal-finance-tracker
+cp .env.example .env
+```
+Edit `.env` and set **at minimum**:
+```
+RP_ID=finance.yourdomain.com
+RP_NAME=Finance Tracker
+RP_ORIGIN=https://finance.yourdomain.com
+ACME_EMAIL=you@yourdomain.com
+```
+Leave the Trade Republic / Revolut / e-mail values as placeholders for now — the
+app boots fine without them and you'll link them in step 5.
+
+> `.env`, `keys/`, and `*.db` are gitignored. Never commit real secrets — this
+> repository is public.
+
+## 2. Set your one-time bootstrap password
+```bash
+docker compose run --rm app python -m backend.auth_setup
+```
+Enter a long password (≥ 12 chars). You'll use it **once**.
+
+## 3. Launch
+```bash
+mkdir -p data keys
+docker compose up -d --build
+docker compose logs -f caddy   # watch the cert get issued
+```
+
+## 4. First login → enrol your passkey
+1. Open `https://finance.yourdomain.com` on your Mac.
+2. Sign in with the bootstrap password.
+3. When prompted, **Enrol passkey (Touch ID)** and confirm with your fingerprint.
+4. Done — the bootstrap password is now **permanently disabled**. From now on the
+   only way in is your Mac's biometric passkey.
+   - Add more devices later via **+ Passkey** in the top bar (while logged in).
+   - **Lost every passkey?** Re-run step 2 on the server (shell access required)
+     to re-enable a bootstrap password — the documented break-glass path.
+
+## 5. Link Trade Republic (and Revolut) — do this after you're logged in
+See **[LINKING.md](LINKING.md)** for the step-by-step pairing flow. In short:
+```bash
+# Pair the Trade Republic device once (writes keys/tr_keyfile.pem):
+docker compose run --rm app python -m backend.integrations.tr_setup
+# then set TRADE_REPUBLIC_PHONE in .env, remove the PIN line, and restart:
+docker compose up -d
+```
+
+## Updating
+```bash
+git pull && docker compose up -d --build
+```
+The `data/` volume (DB, sessions, enrolled passkeys) and `keys/` persist across
+rebuilds.
+
+## Security model (summary)
+- **Passkey-only** login after setup (WebAuthn, user-verification required) —
+  phishing-resistant, no shared secret to steal.
+- Server-side sessions; the cookie holds a random token, the DB only its SHA-256.
+  **Session ID is rotated on every login** and destroyed on logout.
+- Cookies: HttpOnly, SameSite=Strict, Secure + `__Host-` prefix on HTTPS.
+- argon2id password hashing; IP-based lockout after repeated failures.
+- CSP / HSTS / nosniff / frame-ancestors-none headers on every response.
+- Origin-checked state-changing requests (CSRF defence on top of SameSite).
