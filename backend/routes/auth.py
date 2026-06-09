@@ -69,9 +69,16 @@ def password_login(request: Request, body: PwBody):
                             "Password login is disabled — use your passkey.")
     if not auth.verify_password(body.password):
         auth.record_attempt(ip, False)
+        # Alert exactly once, on the failure that trips the lockout.
+        if auth.is_locked_out(ip):
+            auth.notify("Account locked after failed sign-ins", request,
+                        detail=f"{config.MAX_PW_FAILURES} failed bootstrap-password attempts",
+                        warn=True)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid password.")
     auth.record_attempt(ip, True)
     token = auth.create_session(request, old_token=request.cookies.get(config.SESSION_COOKIE))
+    auth.notify("New sign-in (bootstrap password)", request,
+                detail="One-time password login — enrol a passkey to finish setup")
     resp = JSONResponse({"ok": True, "next": "enroll"})
     auth.set_session_cookie(resp, token)
     return resp
@@ -123,6 +130,7 @@ async def passkey_login_complete(request: Request):
             (verification.new_sign_count, row["id"]),
         )
     token = auth.create_session(request, old_token=request.cookies.get(config.SESSION_COOKIE))
+    auth.notify("New sign-in (passkey)", request, detail=f"Passkey: {row['label'] or 'unnamed'}")
     resp = JSONResponse({"ok": True})
     auth.set_session_cookie(resp, token)
     resp.delete_cookie(config.CHALLENGE_COOKIE, path="/")
@@ -178,6 +186,7 @@ async def passkey_register_complete(request: Request, _: None = Depends(auth.req
         )
     # Passkey-only model: now that a hardware passkey exists, kill the password.
     auth.disable_password()
+    auth.notify("New passkey enrolled", request, detail=f"Label: {label}", warn=True)
     resp = JSONResponse({"ok": True, "password_disabled": True})
     resp.delete_cookie(config.CHALLENGE_COOKIE, path="/")
     return resp

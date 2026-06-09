@@ -19,6 +19,56 @@ def send_email(subject: str, html_body: str):
         server.login(os.environ["EMAIL_FROM"], os.environ["EMAIL_SMTP_PASSWORD"])
         server.sendmail(os.environ["EMAIL_FROM"], os.environ["EMAIL_TO"], msg.as_string())
 
+
+def email_configured() -> bool:
+    return all(os.getenv(k) for k in ("EMAIL_FROM", "EMAIL_TO", "EMAIL_SMTP_PASSWORD"))
+
+
+def send_security_alert(event: str, when: str, ip: str, user_agent: str,
+                        detail: str = "", warn: bool = False):
+    """Notify the owner of a security-relevant auth event (new sign-in / passkey
+    enrolment / lockout). Best-effort: no-ops if e-mail isn't configured and never
+    raises — auth flows must not depend on mail delivery. Runs off the request
+    thread (see auth.notify)."""
+    if not email_configured():
+        logger.info("Security event '%s' — e-mail not configured, skipping alert", event)
+        return
+    from backend import config
+    color = "#e53e3e" if warn else "#3b82f6"
+    detail_row = (
+        f"<tr><td style='padding:8px 0;color:#718096'>Detail</td>"
+        f"<td style='padding:8px 0;font-weight:bold'>{detail}</td></tr>" if detail else ""
+    )
+    body = f"""
+    <html><body style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+    <div style="background:{color}; color:white; padding:20px; border-radius:8px 8px 0 0;">
+        <h2 style="margin:0">🔐 {event}</h2>
+    </div>
+    <div style="padding:20px; border:1px solid #e2e8f0; border-radius:0 0 8px 8px;">
+        <table style="width:100%; border-collapse:collapse">
+            <tr><td style="padding:8px 0; color:#718096">When</td>
+                <td style="padding:8px 0; font-weight:bold">{when}</td></tr>
+            <tr><td style="padding:8px 0; color:#718096">IP address</td>
+                <td style="padding:8px 0; font-weight:bold">{ip}</td></tr>
+            <tr><td style="padding:8px 0; color:#718096">Device</td>
+                <td style="padding:8px 0">{user_agent or 'unknown'}</td></tr>
+            {detail_row}
+        </table>
+        <p style="color:#718096; margin-top:20px; font-size:14px">
+            If this was you, no action is needed. If not, your account is protected by a
+            hardware passkey (it cannot be phished), but you should review activity on your
+            <a href="{config.RP_ORIGIN}">dashboard</a> and check the server.
+        </p>
+    </div>
+    </body></html>
+    """
+    try:
+        send_email(f"🔐 Finance Tracker — {event}", body)
+        logger.info("Security alert e-mailed: %s", event)
+    except Exception:
+        logger.exception("Failed to send security alert e-mail for '%s'", event)
+
+
 def check_and_alert():
     """Check all limits; send emails for 80% and 100% thresholds (once per threshold per month)."""
     month = date.today().strftime("%Y-%m")

@@ -80,3 +80,7 @@ rebuilds.
 - argon2id password hashing; IP-based lockout after repeated failures.
 - CSP / HSTS / nosniff / frame-ancestors-none headers on every response.
 - Origin-checked state-changing requests (CSRF defence on top of SameSite).
+- **Login alerts**: if e-mail is configured (`EMAIL_*`), you get a notification on
+  every sign-in, new passkey enrolment, and account lockout — with the time, IP,
+  and device. Best-effort and off the request path; if mail isn't set up it's
+  silently skipped.

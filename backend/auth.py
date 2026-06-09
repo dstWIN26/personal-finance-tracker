@@ -18,6 +18,7 @@ import os
 import hashlib
 import secrets
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request, HTTPException, status
@@ -175,6 +176,25 @@ def _client_ip(request: Request) -> str:
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "?"
+
+
+# ── Security notifications ────────────────────────────────────────────────────
+def notify(event: str, request: Request, detail: str = "", warn: bool = False) -> None:
+    """Fire-and-forget e-mail alert for an auth event (new sign-in / passkey
+    enrolment / lockout). Sent on a daemon thread so SMTP latency never blocks the
+    response, and fully swallowed if mail isn't configured."""
+    try:
+        from backend import alerts
+        ip = _client_ip(request)
+        ua = request.headers.get("user-agent", "")[:255]
+        when = _now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        threading.Thread(
+            target=alerts.send_security_alert,
+            args=(event, when, ip, ua, detail, warn),
+            daemon=True,
+        ).start()
+    except Exception:                                    # noqa: BLE001 — never break auth
+        logger.exception("Failed to dispatch security notification")
 
 
 # ── Cookie helpers ────────────────────────────────────────────────────────────
