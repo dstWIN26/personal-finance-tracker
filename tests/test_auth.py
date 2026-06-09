@@ -91,6 +91,20 @@ def test_lockout_emits_single_alert(client, password, captured_alerts):
     assert lock_alerts[0]["warn"] is True
 
 
+def test_client_ip_prefers_cloudflare_header():
+    from types import SimpleNamespace
+
+    def r(headers):
+        return SimpleNamespace(headers=headers, client=SimpleNamespace(host="5.5.5.5"))
+
+    # CF-Connecting-IP wins (authoritative behind Cloudflare).
+    assert auth._client_ip(r({"cf-connecting-ip": "9.9.9.9", "x-forwarded-for": "1.1.1.1"})) == "9.9.9.9"
+    # Else first X-Forwarded-For hop.
+    assert auth._client_ip(r({"x-forwarded-for": "1.1.1.1, 2.2.2.2"})) == "1.1.1.1"
+    # Else the socket peer.
+    assert auth._client_ip(r({})) == "5.5.5.5"
+
+
 def test_passkey_register_requires_session(client):
     assert client.post("/auth/passkey/register/begin").status_code == 401
 

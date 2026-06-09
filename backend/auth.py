@@ -207,7 +207,14 @@ def _valid_session(token: str | None) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    # Behind Caddy, the real client IP is in X-Forwarded-For (first hop).
+    # Behind Cloudflare → Caddy, CF-Connecting-IP is the authoritative client IP.
+    # Cloudflare always sets it to the true client; it's trustworthy only when the
+    # origin is firewalled to Cloudflare's ranges (scripts/cloudflare-firewall.sh),
+    # otherwise an attacker hitting the origin directly could spoof it.
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    # Otherwise the first X-Forwarded-For hop (set by Caddy).
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[0].strip()

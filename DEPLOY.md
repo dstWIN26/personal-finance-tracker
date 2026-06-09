@@ -97,6 +97,35 @@ docker compose up -d
 Test a restore once now, while you still remember the passphrase — an untested
 backup isn't a backup.
 
+## Behind Cloudflare (recommended edge protection)
+If you front the app with Cloudflare, it provides the DDoS protection, WAF, and
+**edge rate-limiting** — so you do **not** need fail2ban or a Caddy `rate_limit`
+module (behind a proxy those only ever see Cloudflare's IPs anyway). Do these
+four things to make that protection real and non-bypassable:
+
+1. **Proxy the record (orange cloud).** In Cloudflare DNS, the `finance` A/AAAA
+   record must be **Proxied**, not "DNS only" (grey). Grey = traffic goes straight
+   to your origin and you get **zero** Cloudflare protection. This is the make-or-break setting.
+2. **SSL/TLS mode = Full (strict).** Cloudflare → origin stays encrypted and
+   validated. Caddy's Let's Encrypt cert satisfies this and keeps auto-renewing
+   through the proxy (ACME challenges still pass via Cloudflare).
+3. **Lock the origin to Cloudflare's IPs** so nobody can skip Cloudflare by hitting
+   your VPS IP directly. Docker-published ports bypass `ufw`, so use the provided
+   iptables script (after `docker compose up`):
+   ```bash
+   sudo ./scripts/cloudflare-firewall.sh
+   sudo apt install -y iptables-persistent && sudo netfilter-persistent save  # persist
+   ```
+4. **(Optional) Edge rate-limit on `/auth/*`.** In Cloudflare → Security → WAF →
+   Rate limiting rules, add e.g. "≤ 20 requests/min/IP to `/auth/*`". This is the
+   actual "edge rate-limiting", done at Cloudflare, not in the app.
+
+The app already reads the true client IP from `CF-Connecting-IP` (for lockout +
+login alerts), which is trustworthy precisely because of step 3.
+
+> If your record is **DNS-only (grey)**, you have no edge protection — either flip
+> it to Proxied (recommended), or ask for in-app/fail2ban rate-limiting instead.
+
 ## Security model (summary)
 - **Passkey-only** login after setup (WebAuthn, user-verification required) —
   phishing-resistant, no shared secret to steal.
