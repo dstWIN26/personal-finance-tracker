@@ -99,3 +99,31 @@ def test_passkey_login_begin_is_public(client):
     r = client.post("/auth/passkey/login/begin")
     assert r.status_code == 200
     assert r.json()["userVerification"] == "required"
+
+
+# ── Session management ───────────────────────────────────────────────────────
+def test_sessions_list_flags_current(auth_client, req):
+    auth.create_session(req(ip="2.2.2.2"))
+    auth.create_session(req(ip="3.3.3.3"))
+    rows = auth_client.get("/auth/sessions").json()
+    assert len(rows) == 3
+    assert sum(1 for s in rows if s["current"]) == 1
+
+
+def test_revoke_others_keeps_current(auth_client, req):
+    auth.create_session(req(ip="2.2.2.2"))
+    auth.create_session(req(ip="3.3.3.3"))
+    r = auth_client.post("/auth/sessions/revoke-others")
+    assert r.json()["revoked"] == 2
+    rows = auth_client.get("/auth/sessions").json()
+    assert len(rows) == 1 and rows[0]["current"] is True
+    # current session still works
+    assert auth_client.get("/overview/").status_code == 200
+
+
+def test_revoke_specific_session(auth_client, req):
+    auth.create_session(req(ip="2.2.2.2"))
+    rows = auth_client.get("/auth/sessions").json()
+    other = next(s for s in rows if not s["current"])
+    assert auth_client.request("DELETE", f"/auth/sessions/{other['id']}").status_code == 200
+    assert auth_client.request("DELETE", "/auth/sessions/99999").status_code == 404

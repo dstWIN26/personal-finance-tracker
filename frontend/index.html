@@ -30,6 +30,7 @@
         <span class="live-dot"></span>
         <span x-text="live ? (feedError ? 'Error' : 'Live') : 'Paused'"></span>
     </button>
+    <button class="icon-btn" @click="openSessions()" title="Active sessions">Sessions</button>
     <button class="icon-btn" @click="addPasskey()" title="Enrol another passkey">+ Passkey</button>
     <button class="icon-btn" @click="logout()" title="Sign out">Sign out</button>
 </header>
@@ -544,6 +545,39 @@
                 <span>52-week range</span>
                 <div class="range-bar"><div class="range-dot" :style="`left:${range52(active && active.meta)}%`"></div></div>
             </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════ SECURITY (sessions) ═══════════════ -->
+    <section x-show="tab === 'security'">
+        <div class="section-header">
+            <h2>Security</h2>
+            <button class="btn btn-ghost btn-sm" @click="revokeOthers()" x-show="sessions.length > 1">
+                Sign out all other devices
+            </button>
+        </div>
+        <div class="card">
+            <div class="card-header">Active sessions</div>
+            <table>
+                <thead><tr><th>Device</th><th>IP</th><th>Last active</th><th>Expires</th><th></th></tr></thead>
+                <tbody>
+                    <template x-for="s in sessions" :key="s.id">
+                        <tr>
+                            <td>
+                                <span x-text="s.user_agent || 'Unknown device'"></span>
+                                <span x-show="s.current" class="tag" style="margin-left:8px">This device</span>
+                            </td>
+                            <td style="color:var(--text-secondary)" x-text="s.ip"></td>
+                            <td style="color:var(--text-secondary)" x-text="s.last_seen"></td>
+                            <td style="color:var(--text-secondary)" x-text="s.expires_at"></td>
+                            <td style="text-align:right">
+                                <button class="btn btn-ghost btn-sm" x-show="!s.current" @click="revokeSession(s.id)">Revoke</button>
+                            </td>
+                        </tr>
+                    </template>
+                    <tr x-show="sessions.length === 0"><td colspan="5" class="empty-state">No active sessions</td></tr>
+                </tbody>
+            </table>
         </div>
     </section>
 

@@ -202,6 +202,26 @@ def logout(request: Request):
     return resp
 
 
+@router.get("/sessions")
+def sessions(request: Request, _: None = Depends(auth.require_session)):
+    return auth.list_sessions(auth.session_token_hash(request))
+
+
+@router.post("/sessions/revoke-others")
+def revoke_other_sessions(request: Request, _: None = Depends(auth.require_session)):
+    auth._check_origin(request)
+    revoked = auth.revoke_other_sessions(auth.session_token_hash(request))
+    return {"ok": True, "revoked": revoked}
+
+
+@router.delete("/sessions/{sid}")
+def revoke_session(sid: int, request: Request, _: None = Depends(auth.require_session)):
+    auth._check_origin(request)
+    if not auth.revoke_session(sid):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found.")
+    return {"ok": True}
+
+
 @router.get("/credentials")
 def list_credentials(_: None = Depends(auth.require_session)):
     with connect() as conn:

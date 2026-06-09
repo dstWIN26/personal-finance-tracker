@@ -14,6 +14,10 @@ secrets/
 *.sqlite3
 data/
 
+# Encrypted backup snapshots (still secrets — never commit)
+backups/
+*.tar.gz.enc
+
 # Python
 __pycache__/
 *.pyc

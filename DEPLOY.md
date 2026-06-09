@@ -71,6 +71,32 @@ git pull && docker compose up -d --build
 The `data/` volume (DB, sessions, enrolled passkeys) and `keys/` persist across
 rebuilds.
 
+## Backups (do this — it's your only safety net)
+`data/` holds your DB **and enrolled passkeys**; `keys/` holds the Trade Republic
+device credential. Lose the box without a backup and you lose your financial
+history *and* could be locked out. `scripts/backup.sh` makes an **encrypted**
+snapshot and can ship it off-box.
+
+```bash
+# one-off, with an AES-256 passphrase you store somewhere safe (NOT on the server):
+BACKUP_PASSPHRASE='a-long-random-passphrase' ./scripts/backup.sh
+
+# nightly via cron (crontab -e) — optionally copy off-box with scp or rclone:
+0 3 * * *  cd /home/dustin/personal-finance-tracker && \
+  BACKUP_PASSPHRASE='...' BACKUP_SCP_DEST='user@backup-host:/srv/fts' ./scripts/backup.sh >> /var/log/fts-backup.log 2>&1
+```
+Snapshots land in `backups/` (gitignored), newest `BACKUP_KEEP` (default 14) kept.
+Off-box options: `BACKUP_SCP_DEST=user@host:/path` and/or `BACKUP_RCLONE_DEST=remote:bucket/path`.
+
+**Restore** (stop the app first):
+```bash
+docker compose down
+BACKUP_PASSPHRASE='...' ./scripts/restore.sh backups/fts-backup-YYYYMMDD-HHMMSS.tar.gz.enc
+docker compose up -d
+```
+Test a restore once now, while you still remember the passphrase — an untested
+backup isn't a backup.
+
 ## Security model (summary)
 - **Passkey-only** login after setup (WebAuthn, user-verification required) —
   phishing-resistant, no shared secret to steal.

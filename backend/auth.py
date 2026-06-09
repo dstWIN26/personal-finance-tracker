@@ -152,6 +152,42 @@ def destroy_session(token: str) -> None:
         conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_sha256(token),))
 
 
+def session_token_hash(request: Request) -> str | None:
+    tok = request.cookies.get(config.SESSION_COOKIE)
+    return _sha256(tok) if tok else None
+
+
+def list_sessions(current_hash: str | None) -> list[dict]:
+    """All active sessions, with the caller's own flagged `current`."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, user_agent, ip, created_at, last_seen, expires_at, token_hash "
+            "FROM sessions ORDER BY last_seen DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["current"] = (d.pop("token_hash") == current_hash)
+        out.append(d)
+    return out
+
+
+def revoke_session(sid: int) -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM sessions WHERE id = ?", (sid,)).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+    return True
+
+
+def revoke_other_sessions(current_hash: str | None) -> int:
+    """Sign out everywhere else — keep only the caller's current session."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM sessions WHERE token_hash != ?", (current_hash or "",))
+        return cur.rowcount
+
+
 def _valid_session(token: str | None) -> bool:
     if not token:
         return False

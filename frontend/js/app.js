@@ -231,6 +231,21 @@ function app() {
         nowLabel() { return new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); },
 
         // ── Account ──
+        sessions: [],
+        openSessions() { this.tab = 'security'; this.loadSessions(); },
+        async loadSessions() {
+            try { this.sessions = await fetch('/auth/sessions').then(r => r.ok ? r.json() : []); }
+            catch (e) { console.error('Sessions load failed', e); }
+        },
+        async revokeSession(id) {
+            try { await fetch(`/auth/sessions/${id}`, { method: 'DELETE' }); await this.loadSessions(); }
+            catch (e) { console.error('Revoke failed', e); }
+        },
+        async revokeOthers() {
+            if (!confirm('Sign out all other devices? They will need to log in again.')) return;
+            try { await fetch('/auth/sessions/revoke-others', { method: 'POST' }); await this.loadSessions(); }
+            catch (e) { console.error('Revoke-others failed', e); }
+        },
         async logout() {
             try { await fetch('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
             location.href = '/login';
