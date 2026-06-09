@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Planning multi-user?** Read [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) first — the
+> app is currently **single-user** and converting to multi-tenant is an architectural
+> change (per-user data scoping, encrypted per-user credentials, Postgres). That doc
+> is the authoritative reference for the migration.
+
 ## What This Repository Is
 
 This is a **specification and agent-instruction repository** for building a self-hosted personal finance tracker. The `agents/` folder contains complete implementation blueprints (with code snippets) but **no application code has been written yet**. The task is to implement the application by following the agent files in order.
