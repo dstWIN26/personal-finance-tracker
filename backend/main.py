@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -64,6 +64,19 @@ app.include_router(overview.router,  dependencies=guard)
 app.include_router(auth_routes.router)
 
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
+
+
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated liveness/readiness probe for Docker + uptime monitors.
+    Verifies the process is up and the database is reachable."""
+    try:
+        from backend.database import connect
+        with connect() as conn:
+            conn.execute("SELECT 1")
+        return {"status": "ok", "db": "ok"}
+    except Exception as e:                                # noqa: BLE001
+        return JSONResponse({"status": "degraded", "db": str(e)}, status_code=503)
 
 
 @app.get("/login")

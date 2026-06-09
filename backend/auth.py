@@ -179,20 +179,21 @@ def _client_ip(request: Request) -> str:
 
 
 # ── Security notifications ────────────────────────────────────────────────────
+def _spawn(target, args) -> None:
+    """Run `target(*args)` on a daemon thread (indirected so tests can patch it)."""
+    threading.Thread(target=target, args=args, daemon=True).start()
+
+
 def notify(event: str, request: Request, detail: str = "", warn: bool = False) -> None:
     """Fire-and-forget e-mail alert for an auth event (new sign-in / passkey
-    enrolment / lockout). Sent on a daemon thread so SMTP latency never blocks the
-    response, and fully swallowed if mail isn't configured."""
+    enrolment / lockout). Sent off the request thread so SMTP latency never blocks
+    the response, and fully swallowed if mail isn't configured."""
     try:
         from backend import alerts
         ip = _client_ip(request)
         ua = request.headers.get("user-agent", "")[:255]
         when = _now().strftime("%Y-%m-%d %H:%M:%S UTC")
-        threading.Thread(
-            target=alerts.send_security_alert,
-            args=(event, when, ip, ua, detail, warn),
-            daemon=True,
-        ).start()
+        _spawn(alerts.send_security_alert, (event, when, ip, ua, detail, warn))
     except Exception:                                    # noqa: BLE001 — never break auth
         logger.exception("Failed to dispatch security notification")
 

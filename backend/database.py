@@ -4,7 +4,20 @@ from contextlib import contextmanager
 
 DB_PATH = os.getenv("DB_PATH", "finance.db")
 
+
+def _ensure_dirs():
+    """Create the DB directory (and the TR keyfile dir) if missing, so a fresh
+    deploy doesn't fail just because ./data or ./keys wasn't pre-created."""
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    key_dir = os.path.dirname(os.getenv("TRADE_REPUBLIC_KEYFILE", "keys/tr_keyfile.pem"))
+    if key_dir:
+        os.makedirs(key_dir, exist_ok=True)
+
+
 def init_db():
+    _ensure_dirs()
     with connect() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS positions (
