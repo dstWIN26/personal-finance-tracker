@@ -37,3 +37,18 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
       - name: Scan repo + history for secrets
         run: gitleaks detect --source . --redact --no-banner -v
+
+  dep-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"          # matches the Docker image
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit runtime dependencies for known CVEs
+        # Fails the build if any runtime dependency has a known vulnerability,
+        # so multipart-style advisories surface automatically (C1/D4).
+        run: pip-audit -r requirements.txt
