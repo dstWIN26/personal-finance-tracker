@@ -2,118 +2,139 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Planning multi-user?** Read [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) first — the
-> app is currently **single-user** and converting to multi-tenant is an architectural
-> change (per-user data scoping, encrypted per-user credentials, Postgres). That doc
-> is the authoritative reference for the migration.
+> **Working a planned task?** [`CLAUDE_CODE_PLAN.md`](CLAUDE_CODE_PLAN.md) is the
+> source of truth for the current workstreams (security review, codebase review +
+> multi-tenant readiness, TR linking) and the **hard guardrails** — read it first.
+> [`README.md`](README.md) is the architecture/setup overview. [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md)
+> and [`REVIEW.md`](REVIEW.md) are the latest read-only audits.
+
+> **Planning multi-user?** The app is **single-user by design**. Converting to
+> multi-tenant is an architectural change (per-user data scoping, encrypted per-user
+> credentials, Postgres) — see [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) and the
+> multi-tenant gap analysis in `REVIEW.md`. **Do not enable multi-user without an
+> explicit, separate decision.**
 
 ## What This Repository Is
 
-This is a **specification and agent-instruction repository** for building a self-hosted personal finance tracker. The `agents/` folder contains complete implementation blueprints (with code snippets) but **no application code has been written yet**. The task is to implement the application by following the agent files in order.
+A **built and deployed** self-hosted personal finance tracker (FastAPI + SQLite +
+APScheduler; vanilla HTML/Alpine.js/Chart.js; Docker + Caddy, behind Cloudflare). It
+holds **real** Trade Republic + Revolut data for one owner. The `agents/` folder
+contains the original implementation blueprints and is kept as historical spec — the
+application now exists under `backend/` and `frontend/`.
 
-## Build Execution Order
+## Guardrails (summary — full text in CLAUDE_CODE_PLAN.md)
 
-Read and execute agent files in this sequence:
-
-```
-1. agents/ARCHITECT.md    — data model + directory layout (ground truth for all other agents)
-2. agents/INTEGRATIONS.md — Trade Republic (pytr WebSocket) + Revolut (GoCardless) clients
-3. agents/BACKEND.md      — FastAPI routes, scheduler, database init, auth
-4. agents/ALERTS.md       — spending-limit checker + email alert system
-5. agents/FRONTEND.md     — single-page dashboard (no npm, CDN-only)
-```
-
-When executing a later agent, always treat `ARCHITECT.md` decisions as authoritative (schema, directory layout, tech choices).
+1. **Never touch secrets.** `.env`, `keys/`, `*.pem`, `*.db`, `data/` are off-limits and gitignored. The repo is **public**.
+2. **Auth/security code is sacred.** `backend/auth.py`, sessions, WebAuthn, security headers — change only with a written rationale and full test coverage.
+3. **Do not build multi-tenancy** in normal work; prepare seams only.
+4. **Tests must stay green** (`pytest`, offline). Add tests for what you change; never weaken them.
+5. **Small, reviewable changes**; flag any new dependency.
 
 ## Running the Application
 
-Once built:
-
 ```bash
-# First-time Trade Republic auth (run once — saves session locally)
-pytr login +49XXXXXXXXXX 1234
-
-# First-time Revolut consent (generates a browser URL to authorize)
-python -m backend.integrations.revolut_setup
-
-# Start everything
-docker-compose up
-
-# Development (no Docker)
+# Local dev (no Docker)
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env                 # localhost defaults work over http for dev
+python -m backend.auth_setup         # set a one-time bootstrap password (≥12 chars)
 uvicorn backend.main:app --reload --port 8000
+# then open http://localhost:8000, log in with the password, and ENROL A PASSKEY
+# (the password is permanently disabled once a passkey exists)
+
+# Tests
+pip install -r requirements-dev.txt && pytest
+
+# Production: see DEPLOY.md (VPS + Caddy + Cloudflare). Link accounts: see LINKING.md.
 ```
+
+## Authentication (passkey-only)
+
+- **No username/password env var.** Login is a **WebAuthn passkey** (Touch ID / Hello).
+  A one-time bootstrap password (argon2id, set via `backend.auth_setup`) is used once
+  to log in and enrol the first passkey, then **permanently disabled**.
+- Server-side sessions: cookie holds a random token, DB stores only its SHA-256; the
+  session id is **rotated on every login**. Cookies are `__Host-`/HttpOnly/SameSite=Strict/Secure.
+- IP lockout on bootstrap-password brute force; Origin/CSRF checks; CSP/HSTS/nosniff
+  headers on every response. All in `backend/auth.py` — **treat as sacred**.
 
 ## Environment Variables
 
-Copy `.env.example` to `.env`. All required vars:
+Copy `.env.example` to `.env`. Nothing blocks boot (`backend/config.py` warns, doesn't
+raise) so the app can deploy first and link accounts later.
 
 ```
-TRADE_REPUBLIC_PHONE              # required
-TRADE_REPUBLIC_PIN               # optional — only for one-time pairing, delete after
+# Login / WebAuthn (passkey)
+RP_ID, RP_ORIGIN, RP_NAME            # your domain (localhost for dev); passkeys bind to RP_ID
+SESSION_TTL_HOURS, ACME_EMAIL        # session lifetime; Let's Encrypt email (Caddy)
+MAX_PW_FAILURES, LOCKOUT_MINUTES     # bootstrap-password lockout (defaults 5 / 15)
+# Trade Republic (keyfile auth; PIN never stored)
+TRADE_REPUBLIC_PHONE                 # required for portfolio sync
+TRADE_REPUBLIC_PIN                   # ONLY for one-time pairing — delete after tr_setup
 TRADE_REPUBLIC_KEYFILE=keys/tr_keyfile.pem
-SALTEDGE_APP_ID, SALTEDGE_SECRET            # required
-SALTEDGE_CUSTOMER_ID, SALTEDGE_CONNECTION_ID  # filled by revolut_setup.py
+# Revolut via Salt Edge
+SALTEDGE_APP_ID, SALTEDGE_SECRET
+SALTEDGE_CUSTOMER_ID, SALTEDGE_CONNECTION_ID   # filled by revolut_setup.py
+# Email alerts (optional, Gmail App Password)
 EMAIL_FROM, EMAIL_TO, EMAIL_SMTP_PASSWORD
-DASHBOARD_USERNAME, DASHBOARD_PASSWORD
 PORT=8000
-DB_PATH=finance.db   # optional, defaults to finance.db
+DB_PATH=finance.db                   # compose sets /app/data/finance.db
 ```
-
-`backend/config.py` validates all required vars at startup and raises `RuntimeError` if any are missing.
 
 ## Architecture
 
-### Request Flow
+### Request flow
 ```
-Browser → HTTPS + Basic Auth → FastAPI → SQLite
-                                    ↑
-                              APScheduler (background jobs)
-                                    ↓
-                    Trade Republic (pytr WebSocket) + GoCardless (Revolut)
+Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
+  passkey login, __Host- session cookie        │
+  SecurityHeadersMiddleware on every response   ├── APScheduler (in-process)
+  protected routers guarded by require_session  └── market cache (TTL) for /market/*
 ```
 
 ### Backend (`backend/`)
-- **`main.py`** — FastAPI app entry point; mounts routes, serves `frontend/` as static, starts APScheduler on startup. Auth is `HTTPBasic` via `secrets.compare_digest` against env vars — applied as a dependency on all routers.
-- **`database.py`** — `init_db()` creates all tables; `connect()` is a context manager yielding a `sqlite3.Row`-factory connection with auto-commit.
-- **`config.py`** — loads `.env` and validates required keys at import time.
-- **`integrations/trade_republic.py`** — async functions using `pytr`; throttle to 1 req/sec. Auth via device **keyfile** (`keys/tr_keyfile.pem`), NOT the PIN. Pairing done once via `tr_setup.py`. Errors are logged without credentials/tracebacks.
-- **`integrations/revolut.py`** — async `httpx` calls to the **Salt Edge** Account Information API (v6); paginates transactions per account, records balances, `categorize()` keyword-maps descriptions to categories. Consent set up via `revolut_setup.py`.
-- **`routes/spending.py`** — `/spending`, `/spending/summary`, `/spending/daily`, `/spending/top-merchants`. Expenses are rows where `amount < 0`.
-- **`routes/portfolio.py`** — `/portfolio` returns latest snapshot per ISIN (inner-join on `MAX(fetched_at)`); `/portfolio/top` returns best/worst by `pl_pct`.
-- **`routes/limits.py`** — CRUD for budget limits; `/limits/status` joins live spending to each limit and returns `pct` (spent/limit × 100).
-- **`alerts.py`** — `check_and_alert()` fires hourly; uses `alerts_sent` table to deduplicate within a calendar month (80% and 100% thresholds, one email per threshold per month).
+- **`main.py`** — app wiring; mounts routers behind `Depends(auth.require_session)`; serves `frontend/`; starts APScheduler in `lifespan`; `/healthz` (DB ping); `/` redirects to `/login` when unauthenticated. `docs_url`/`redoc_url` disabled.
+- **`auth.py`** — WebAuthn passkeys, sessions (rotation, sliding expiry), lockout, Origin/CSRF, `SecurityHeadersMiddleware`, security-alert dispatch. **Sacred.**
+- **`auth_setup.py`** — CLI to set the one-time bootstrap password.
+- **`database.py`** — `init_db()` creates all tables (incl. auth tables); `connect()` is a context manager yielding a `sqlite3.Row` connection with auto-commit; `_ensure_dirs()` creates `data/`+`keys/`.
+- **`config.py`** — loads `.env`; `validate()` **warns** (does not raise) on missing optional integrations; derives WebAuthn/cookie settings.
+- **`integrations/trade_republic.py`** — `pytr` (unofficial WebSocket); auth via device **keyfile**, NOT the PIN; paired once via `tr_setup.py`; errors logged without credentials. Degrades gracefully when the keyfile is absent.
+- **`integrations/revolut.py`** — async `httpx` to the **Salt Edge** Account Information API v6; paginates transactions, records balances, `categorize()` keyword-maps descriptions. Consent via `revolut_setup.py`.
+- **`integrations/market.py`** — keyless live data (Yahoo chart API, US Treasury XML, ECB SDW) with an in-process TTL cache; scheduler warm-jobs keep it fresh.
+- **`routes/`** — `auth`, `overview`, `spending`, `portfolio`, `market`, `limits`. Market routes whitelist symbols (SSRF guard).
+- **`alerts.py`** — budget-limit checker (80%/100%, deduped per month) + security-event emails. Best-effort; no-ops if email unconfigured.
 
-### Scheduler Jobs (APScheduler, in-process)
+### Scheduler jobs (APScheduler, in-process)
 | Job | Interval |
 |---|---|
 | TR portfolio sync | 15 min |
 | TR transaction sync | 1 hr |
-| Revolut transaction + balance sync | 1 hr |
-| Limit check + email alerts | 1 hr |
-| Daily summary email (optional) | Cron 21:00 |
-| Weekly portfolio digest (optional) | Cron Mon 08:00 |
+| Revolut (Salt Edge) sync | 1 hr |
+| Budget-limit check + alerts | 1 hr |
+| Market quote cache warm | 60 s |
+| Bond-yield cache warm | 30 min |
+| Daily/weekly digests | optional (commented out in `main.py`) |
 
 ### Frontend (`frontend/`)
-No build step. CDN dependencies: **Chart.js 4** + **Alpine.js 3**. Custom dark theme CSS (no framework).
-- Design inspired by Revolut / Trade Republic / Scalable Capital: near-black `#0a0a0a` background, `#141414` cards, Inter font, white pill-button CTAs, green/red for gains/losses.
-- `index.html` — single page with three Alpine-controlled tabs: Spending, Portfolio, Limits.
-- `js/app.js` — `app()` function defines all Alpine state; fetches all backend endpoints on `init()` and re-fetches on filter changes.
-- Charts are rendered by `renderCategoryChart()` and `renderDailyChart()` globals; each call destroys the previous Chart.js instance before creating a new one.
+No build step; **CDN-only** (Chart.js 4 + financial plugin + luxon, Alpine.js 3,
+`webauthn.js`). Dark theme, custom CSS. `index.html` has seven tabs — **Overview,
+Spending, Portfolio, Markets, Trading, Limits, Security** — driven by `js/app.js`
+(`app()` Alpine state; fetch-on-init, re-fetch on filter change; chart renderers
+destroy the prior Chart.js instance before recreating). `login.html`/`js/login.js`
+handle passkey + bootstrap-password login.
 
-### Database Schema (SQLite)
-- `positions` — TR portfolio snapshots; historical rows kept; latest per ISIN resolved at query time.
-- `transactions` — unified TR + Revolut ledger; `source` field distinguishes them; `amount < 0` = expense.
-- `balances` — time-series balance snapshots per source.
-- `limits` — `category TEXT UNIQUE` (NULL = total monthly limit); upserted on conflict.
-- `alerts_sent` — deduplication log; one row per `(limit_id, threshold, month)`.
+### Database schema (SQLite)
+`positions` (TR snapshots; latest-per-ISIN resolved at query time), `transactions`
+(unified TR + Revolut; `amount < 0` = expense), `balances` (time-series per source),
+`limits` (per-category or total monthly), `alerts_sent` (dedup log). Auth tables:
+`auth_state` (singleton), `webauthn_credentials`, `sessions`, `auth_challenges`,
+`login_attempts`. All queries are parameterised.
 
 ## Key Design Decisions
 
-- **SQLite over PostgreSQL** — zero ops for a single-user app; switching later requires only changing the SQLAlchemy connection string.
-- **APScheduler inside FastAPI** — single process = single container; jobs resume on next startup after restart.
-- **HTTP Basic Auth** — appropriate for a single-user personal app over HTTPS; credentials never stored in DB.
-- **No npm** — Chart.js and Alpine.js load from CDN; no Node.js needed anywhere.
-- **Trade Republic via `pytr`** — unofficial WebSocket reverse-engineering; session saved locally after one-time OTP. Rate-limit to 1 req/sec and avoid polling more often than every 5 minutes.
-- **Revolut via Salt Edge** — official PSD2 Open Banking aggregator (free tier); chosen over GoCardless/Nordigen because the latter closed new registrations. Bank-level encryption, bank login never stored by us, consent revocable. Connect-session flow in `revolut_setup.py` writes `SALTEDGE_CUSTOMER_ID` + `SALTEDGE_CONNECTION_ID`; consent must be periodically re-authorized.
-- **Trade Republic credentials** — PIN is never persisted. One-time device pairing (`tr_setup.py`) writes a private keyfile (`keys/`, gitignored, chmod 600) used for all subsequent logins. Credentials are never exposed by any route (API docs disabled) and never written to logs or the DB.
+- **SQLite over Postgres** — zero ops for a single-user app.
+- **APScheduler inside FastAPI** — single process = single container; jobs resume on restart.
+- **Passkey-only WebAuthn** (not Basic Auth) — phishing-resistant, no shared secret; session id rotated on every login.
+- **No npm** — Chart.js / Alpine.js / webauthn helpers load from CDN.
+- **Trade Republic via `pytr`** — unofficial; PIN never persisted, device keyfile (gitignored, chmod 600) used for all syncs; rate-limit ~1 req/sec.
+- **Revolut via Salt Edge** — official PSD2 aggregator (free tier); bank login never stored by us; only an opaque connection ID is kept; consent periodically re-authorised.
+- **Market data keyless** — Yahoo / US Treasury / ECB, cached in-process and scheduler-warmed.
