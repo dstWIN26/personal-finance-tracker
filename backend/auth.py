@@ -302,6 +302,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "font-src https://fonts.gstatic.com; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
+        "object-src 'none'; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     )
 

@@ -61,6 +61,10 @@ def test_password_login_grants_access(client, password):
 def test_security_headers_present(client):
     h = client.get("/auth/status").headers
     assert "content-security-policy" in h
+    csp = h["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp           # no plugin/embed vector
+    assert "base-uri 'none'" in csp
     assert h.get("x-content-type-options") == "nosniff"
     assert h.get("x-frame-options") == "DENY"
 
