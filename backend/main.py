@@ -75,8 +75,11 @@ def healthz():
         with connect() as conn:
             conn.execute("SELECT 1")
         return {"status": "ok", "db": "ok"}
-    except Exception as e:                                # noqa: BLE001
-        return JSONResponse({"status": "degraded", "db": str(e)}, status_code=503)
+    except Exception:                                     # noqa: BLE001
+        # Don't leak the exception detail (e.g. a filesystem path) on this
+        # unauthenticated probe — log it server-side, return a generic status.
+        logging.getLogger(__name__).exception("healthz DB check failed")
+        return JSONResponse({"status": "degraded"}, status_code=503)
 
 
 @app.get("/login")

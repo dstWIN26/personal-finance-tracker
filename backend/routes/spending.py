@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from backend.database import connect
 from typing import Optional
 from datetime import date
@@ -66,7 +66,7 @@ def spending_summary(month: Optional[str] = None):
     return [dict(r) for r in rows]
 
 @router.get("/top-merchants")
-def top_merchants(month: Optional[str] = None, limit: int = 10):
+def top_merchants(month: Optional[str] = None, limit: int = Query(10, ge=1, le=100)):
     if not month:
         month = date.today().strftime("%Y-%m")
     with connect() as conn:
