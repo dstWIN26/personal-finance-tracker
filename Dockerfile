@@ -2,12 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# gosu = tiny, su-exec-style privilege-drop tool (Debian-packaged). The entrypoint
-# uses it to fix volume ownership as root, then run the app as a non-root user.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gosu \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 10001 --user-group --home-dir /app app
+# gosu = tiny, su-exec-style privilege-drop tool. The entrypoint uses it to fix
+# volume ownership as root, then run the app as a non-root user. We copy the static
+# binary from its official (multi-arch) image over HTTPS instead of apt-installing
+# it, so the build needs no Debian HTTP mirror (port 80) — only the registry (443),
+# which is far more reliable behind restrictive egress / on some VPS networks.
+COPY --from=tianon/gosu:1.17 /usr/local/bin/gosu /usr/local/bin/gosu
+RUN useradd --system --uid 10001 --user-group --home-dir /app app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
