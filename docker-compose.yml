@@ -1,6 +1,12 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      # Build RUN steps (pip install) use the host's network namespace. The VPS's
+      # default build network has no working outbound route (IPv6 unreachable /
+      # port-80 timeouts), while the host can reach PyPI fine. This makes builds
+      # reliable without reconfiguring the Docker daemon.
+      network: host
     env_file:
       - .env
     environment:
