@@ -53,30 +53,53 @@ TREASURY_XML = (
     "interest-rates/pages/xml"
 )
 ECB_YC = "https://data-api.ecb.europa.eu/service/data/YC"
+# A plain, current browser UA. Yahoo throttles/blocks requests that look like
+# bots or carry an unusual token, so we avoid fingerprinting ourselves here.
 _UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                     "AppleWebKit/537.36 (KHTML, like Gecko) finance-tracker/1.0"}
+                     "AppleWebKit/537.36 (KHTML, like Gecko) "
+                     "Chrome/124.0.0.0 Safari/537.36"}
 
 # ── Tiny in-process TTL cache ─────────────────────────────────────────────────
 _CACHE: dict[str, tuple[float, object]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
+# When an upstream is failing we keep serving the last-good value but re-try this
+# often (seconds), so recovery is quick without per-request hammering.
+_STALE_RETRY = 20
 
 
 async def _cached(key: str, ttl: int, producer):
     """Return cached value for `key`, or await `producer()` and cache it.
 
     A per-key lock collapses concurrent misses into a single upstream fetch.
+
+    Resilience: providers (esp. Yahoo, which rate-limits datacenter IPs) fail
+    in bursts where *every* symbol errors at once and the producer yields an
+    empty/falsy payload. We never cache such a result, and instead keep serving
+    the last-known-good value (stale) so a transient upstream hiccup doesn't
+    flap the dashboard into an error state. A truly empty result only surfaces
+    on a cold start where we have never had data. While serving stale we re-arm
+    a short TTL so we retry the provider soon without hammering it per request.
     """
     hit = _CACHE.get(key)
     if hit and hit[0] > time.monotonic():
         return hit[1]
     lock = _LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
-        hit = _CACHE.get(key)                       # re-check inside the lock
-        if hit and hit[0] > time.monotonic():
+        fresh = _CACHE.get(key)                     # re-check inside the lock
+        if fresh and fresh[0] > time.monotonic():
+            return fresh[1]
+        try:
+            value = await producer()
+        except Exception as e:                      # noqa: BLE001 — whole batch failed
+            logger.warning("market producer for %r failed: %s", key, e)
+            value = None
+        if value:                                   # only cache real data
+            _CACHE[key] = (time.monotonic() + ttl, value)
+            return value
+        if hit:                                     # serve last-good; retry soon
+            _CACHE[key] = (time.monotonic() + min(ttl, _STALE_RETRY), hit[1])
             return hit[1]
-        value = await producer()
-        _CACHE[key] = (time.monotonic() + ttl, value)
-        return value
+        return value                                # cold start, no data yet
 
 
 # ── Yahoo ─────────────────────────────────────────────────────────────────────

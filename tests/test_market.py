@@ -51,6 +51,54 @@ def test_cache_collapses_calls_within_ttl():
     assert calls["n"] == 1                          # second call served from cache
 
 
+def test_cache_serves_stale_when_producer_returns_empty():
+    # A transient upstream failure (every symbol errors → empty payload) must not
+    # overwrite the last-good value; the dashboard keeps showing stale data rather
+    # than flapping into an error state.
+    out = {"v": ["good"]}
+
+    async def producer():
+        return out["v"]
+
+    async def run():
+        first = await market._cached("stale-empty", 0, producer)   # ttl 0 → expires at once
+        out["v"] = []                                              # upstream now empty
+        second = await market._cached("stale-empty", 0, producer)
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first == ["good"]
+    assert second == ["good"]                       # served stale, not the empty []
+
+
+def test_cache_serves_stale_when_producer_raises():
+    out = {"v": "good", "boom": False}
+
+    async def producer():
+        if out["boom"]:
+            raise RuntimeError("upstream 429")
+        return out["v"]
+
+    async def run():
+        first = await market._cached("stale-raise", 0, producer)
+        out["boom"] = True                                        # upstream now throws
+        second = await market._cached("stale-raise", 0, producer)
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first == "good"
+    assert second == "good"                         # exception swallowed, stale served
+
+
+def test_cache_returns_empty_on_cold_failure():
+    # No prior good value → an empty result is surfaced honestly (drives the
+    # "Error" indicator only when data has genuinely never loaded).
+    async def producer():
+        return []
+
+    assert asyncio.run(market._cached("cold-fail", 0, producer)) == []
+
+
 def test_symbol_whitelist_contains_known_indices():
     assert "^GSPC" in _ALLOWED
     assert "^VIX" in _ALLOWED
