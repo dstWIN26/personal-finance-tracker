@@ -31,8 +31,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(sync_revolut_transactions, "interval", hours=1)
     scheduler.add_job(sync_bank_connections,     "interval", hours=1)
     scheduler.add_job(check_and_alert,           "interval", hours=1)
-    # Market-data cache warming → keeps Markets/Trading tabs instant + within rate limits
-    scheduler.add_job(refresh_quotes_cache, "interval", seconds=60, id="market_quotes")
+    # Market-data cache warming → keeps Markets/Trading tabs instant. Interval is
+    # 15 min to stay within FMP's free tier (250 requests/day); the browser polls
+    # the cache, not the upstream. Bonds update daily → 30 min.
+    scheduler.add_job(refresh_quotes_cache, "interval", seconds=900, id="market_quotes")
     scheduler.add_job(refresh_bonds_cache,  "interval", minutes=30, id="market_bonds")
     # Optional digests — uncomment to enable
     # scheduler.add_job(send_daily_summary,   CronTrigger(hour=21, minute=0))
