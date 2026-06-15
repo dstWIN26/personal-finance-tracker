@@ -24,11 +24,21 @@ from fastapi import APIRouter, Request, Response, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from backend import auth, config
+from backend import auth, config, ratelimit
 from backend.database import connect
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _reject_if_refresh_locked(ip: str) -> None:
+    """Hold a refresh-spam offender at the login screen for the lockout window."""
+    remaining = ratelimit.page_guard.locked_remaining(ip)
+    if remaining > 0:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Locked out for refreshing too fast. Try again in {int(remaining) + 1}s.",
+        )
 
 # Single-user identity (stable across enrolments so passkeys group under one user).
 USER_ID = b"finance-tracker-owner"
@@ -61,6 +71,7 @@ class PwBody(BaseModel):
 def password_login(request: Request, body: PwBody):
     auth._check_origin(request)
     ip = auth._client_ip(request)
+    _reject_if_refresh_locked(ip)
     if auth.is_locked_out(ip):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "Too many failed attempts. Try again later.")
@@ -100,6 +111,7 @@ def passkey_login_begin():
 
 @router.post("/passkey/login/complete")
 async def passkey_login_complete(request: Request):
+    _reject_if_refresh_locked(auth._client_ip(request))
     challenge = auth.consume_challenge(request.cookies.get(config.CHALLENGE_COOKIE), "authenticate")
     if not challenge:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Challenge expired — please retry.")

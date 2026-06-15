@@ -36,6 +36,15 @@ def captured_alerts(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def reset_page_guard():
+    """The refresh-spam guard is a module singleton — clear it around each test."""
+    from backend import ratelimit
+    ratelimit.page_guard.reset()
+    yield
+    ratelimit.page_guard.reset()
+
+
 @pytest.fixture
 def app():
     from backend import auth
@@ -50,9 +59,20 @@ def app():
     application.include_router(auth_routes.router)
 
     @application.get("/")
-    def index(request: Request):
+    async def index(request: Request):
+        # Mirrors backend.main.index so the refresh-spam guard is exercised here.
+        import asyncio
+        from backend import ratelimit, config
         if not auth.is_authenticated(request):
             return RedirectResponse("/login", status_code=303)
+        action, secs = ratelimit.page_guard.check(auth._client_ip(request))
+        if action == ratelimit.LOCKOUT:
+            auth.destroy_session(request.cookies.get(config.SESSION_COOKIE))
+            resp = RedirectResponse("/login?locked=refresh", status_code=303)
+            auth.clear_session_cookie(resp)
+            return resp
+        if action == ratelimit.THROTTLE:
+            await asyncio.sleep(secs)
         return {"ok": True}
 
     return application

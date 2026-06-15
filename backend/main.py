@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from backend.config import validate
 from backend.database import init_db
-from backend import auth
+from backend import auth, config, ratelimit
 from backend.routes import spending, portfolio, limits, market, overview, auth as auth_routes
 from backend.alerts import check_and_alert, send_daily_summary, send_weekly_portfolio
 from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
@@ -88,8 +88,21 @@ def login_page():
 
 
 @app.get("/")
-def index(request: Request):
+async def index(request: Request):
     # Unauthenticated visitors are sent to the login page (no 401 for the SPA shell).
     if not auth.is_authenticated(request):
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    # Refresh-spam guard: a reload storm first gets a short buffer, then — if it
+    # keeps up — the session is dropped and the owner is bounced back to login.
+    action, secs = ratelimit.page_guard.check(auth._client_ip(request))
+    if action == ratelimit.LOCKOUT:
+        logging.getLogger(__name__).warning(
+            "refresh-spam lockout for %s (%.0fs)", auth._client_ip(request), secs)
+        auth.destroy_session(request.cookies.get(config.SESSION_COOKIE))
+        resp = RedirectResponse("/login?locked=refresh", status_code=status.HTTP_303_SEE_OTHER)
+        auth.clear_session_cookie(resp)
+        return resp
+    if action == ratelimit.THROTTLE:
+        await asyncio.sleep(secs)
     return FileResponse("frontend/index.html")

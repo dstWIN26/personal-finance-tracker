@@ -24,6 +24,11 @@
         if (!s.has_passkey && !s.password_enabled) $('notSetup').hidden = false;
     }
 
+    // Bounced here by the refresh-spam guard → explain why before they retry.
+    if (new URLSearchParams(location.search).get('locked') === 'refresh') {
+        msg('You refreshed too many times and were signed out. Please wait ~2 minutes, then sign in again.');
+    }
+
     $('passkeyBtn').addEventListener('click', async () => {
         msg('Waiting for passkey…', 'info');
         try { await webauthnLogin(); location.href = '/'; }
