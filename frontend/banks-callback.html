@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Linking your bank…</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main style="max-width:420px;margin:18vh auto;text-align:center;padding:0 20px">
+        <h2 style="margin-bottom:12px">Linking your bank</h2>
+        <p id="msg" style="color:var(--text-secondary)">Finishing up…</p>
+        <p><a id="back" href="/?tab=settings" style="display:none">← Back to settings</a></p>
+    </main>
+    <!-- External script (CSP forbids inline scripts). Completes the link via a
+         same-origin, session-authenticated fetch. -->
+    <script src="/static/js/banks-callback.js"></script>
+</body>
+</html>

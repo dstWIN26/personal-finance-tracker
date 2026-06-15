@@ -72,7 +72,11 @@ MAX_PW_FAILURES, LOCKOUT_MINUTES     # bootstrap-password lockout (defaults 5 / 
 TRADE_REPUBLIC_PHONE                 # required for portfolio sync
 TRADE_REPUBLIC_PIN                   # ONLY for one-time pairing — delete after tr_setup
 TRADE_REPUBLIC_KEYFILE=keys/tr_keyfile.pem
-# Revolut via Salt Edge
+# Bank accounts via Enable Banking (free PSD2 aggregator; RSA-key/JWT auth)
+ENABLE_BANKING_APP_ID                 # registered application id
+ENABLE_BANKING_KEYFILE=keys/enablebanking_private.pem   # RSA private key (the credential)
+ENABLE_BANKING_REDIRECT_URL          # optional; defaults to RP_ORIGIN + /settings/banks/callback
+# Revolut via Salt Edge — LEGACY alternative (no free live tier)
 SALTEDGE_APP_ID, SALTEDGE_SECRET
 SALTEDGE_CUSTOMER_ID, SALTEDGE_CONNECTION_ID   # filled by revolut_setup.py
 # Email alerts (optional, Gmail App Password)
@@ -98,9 +102,10 @@ Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
 - **`database.py`** — `init_db()` creates all tables (incl. auth tables); `connect()` is a context manager yielding a `sqlite3.Row` connection with auto-commit; `_ensure_dirs()` creates `data/`+`keys/`.
 - **`config.py`** — loads `.env`; `validate()` **warns** (does not raise) on missing optional integrations; derives WebAuthn/cookie settings.
 - **`integrations/trade_republic.py`** — `pytr` (unofficial WebSocket); auth via device **keyfile**, NOT the PIN; paired once via `tr_setup.py`; errors logged without credentials. Degrades gracefully when the keyfile is absent.
-- **`integrations/revolut.py`** — async `httpx` to the **Salt Edge** Account Information API v6; paginates transactions, records balances, `categorize()` keyword-maps descriptions. Consent via `revolut_setup.py`.
+- **`integrations/revolut.py`** — async `httpx` to the **Salt Edge** Account Information API v6 (legacy); paginates transactions, records balances, `categorize()` keyword-maps descriptions. Consent via `revolut_setup.py`.
+- **`integrations/enable_banking.py`** — free PSD2 aggregator (Revolut, Deutsche Bank, ~2,700 EEA banks). Auth = RS256 JWT signed locally with the RSA keyfile (no shared secret; signed via `cryptography`, already a dep). Redirect/consent linking driven from the Settings page; `sync_bank_connections()` pulls balances+transactions into the unified tables. Bank credentials never touch the app; only an opaque session id + account refs are stored (`bank_connections`). Degrades gracefully when unconfigured.
 - **`integrations/market.py`** — keyless live data (Yahoo chart API, US Treasury XML, ECB SDW) with an in-process TTL cache; scheduler warm-jobs keep it fresh.
-- **`routes/`** — `auth`, `overview`, `spending`, `portfolio`, `market`, `limits`. Market routes whitelist symbols (SSRF guard).
+- **`routes/`** — `auth`, `overview`, `spending`, `portfolio`, `market`, `limits`, `settings`. Market routes whitelist symbols (SSRF guard). `settings` reports link status (never secrets), drives Enable Banking consent, and stores non-secret profile prefs (`app_settings`). The bank consent return URL `GET /settings/banks/callback` is a **public** bounce page (in `main.py`) because the SameSite=Strict cookie isn't sent on the bank's cross-site redirect; it completes the link via a same-origin authenticated fetch.
 - **`alerts.py`** — budget-limit checker (80%/100%, deduped per month) + security-event emails. Best-effort; no-ops if email unconfigured.
 
 ### Scheduler jobs (APScheduler, in-process)
@@ -108,7 +113,8 @@ Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
 |---|---|
 | TR portfolio sync | 15 min |
 | TR transaction sync | 1 hr |
-| Revolut (Salt Edge) sync | 1 hr |
+| Revolut (Salt Edge, legacy) sync | 1 hr |
+| Enable Banking bank sync | 1 hr |
 | Budget-limit check + alerts | 1 hr |
 | Market quote cache warm | 60 s |
 | Bond-yield cache warm | 30 min |
@@ -116,18 +122,21 @@ Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
 
 ### Frontend (`frontend/`)
 No build step; **CDN-only** (Chart.js 4 + financial plugin + luxon, Alpine.js 3,
-`webauthn.js`). Dark theme, custom CSS. `index.html` has seven tabs — **Overview,
-Spending, Portfolio, Markets, Trading, Limits, Security** — driven by `js/app.js`
+`webauthn.js`). Dark theme, custom CSS. `index.html` has tabs — **Overview,
+Spending, Portfolio, Markets, Trading, Limits** plus header-reached **Security,
+Settings** (link/manage accounts) and **Profile** (display prefs) — driven by `js/app.js`
 (`app()` Alpine state; fetch-on-init, re-fetch on filter change; chart renderers
 destroy the prior Chart.js instance before recreating). `login.html`/`js/login.js`
 handle passkey + bootstrap-password login.
 
 ### Database schema (SQLite)
 `positions` (TR snapshots; latest-per-ISIN resolved at query time), `transactions`
-(unified TR + Revolut; `amount < 0` = expense), `balances` (time-series per source),
-`limits` (per-category or total monthly), `alerts_sent` (dedup log). Auth tables:
-`auth_state` (singleton), `webauthn_credentials`, `sessions`, `auth_challenges`,
-`login_attempts`. All queries are parameterised.
+(unified across all sources; `amount < 0` = expense), `balances` (time-series per source),
+`limits` (per-category or total monthly), `alerts_sent` (dedup log). Linking:
+`bank_connections` (opaque aggregator session id + account refs — no credentials),
+`bank_link_state` (single-use consent CSRF token), `app_settings` (key/value display
+prefs). Auth tables: `auth_state` (singleton), `webauthn_credentials`, `sessions`,
+`auth_challenges`, `login_attempts`. All queries are parameterised.
 
 ## Key Design Decisions
 

@@ -38,14 +38,22 @@ function app() {
         _ageTimer: null,
 
         async init() {
+            // Honour ?tab= (the bank-link callback returns to /?tab=settings).
+            const forcedTab = new URLSearchParams(location.search).get('tab');
+            if (forcedTab) this.tab = forcedTab;
             await Promise.all([
                 this.loadSpending(),
                 this.loadPortfolio(),
                 this.loadLimits(),
                 this.loadOverview(),
                 this.loadMarkets(),
+                this.loadProfile(),
             ]);
             await this.loadTrading();
+            if (forcedTab === 'settings') this.loadSettings();
+            else if (!forcedTab && this.profile.default_tab && this.profile.default_tab !== 'overview') {
+                this.tab = this.profile.default_tab;
+            }
             this.startPolling();
             this._ageTimer = setInterval(() => {
                 if (this._lastFetch) this.feedAge = Math.round((Date.now() - this._lastFetch) / 1000);
@@ -209,7 +217,11 @@ function app() {
         },
 
         // ── Formatting helpers ──
-        eur(v)  { return v == null ? '—' : '€' + Number(v).toLocaleString('en-IE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+        eur(v)  {
+            if (v == null) return '—';
+            const sym = { EUR: '€', USD: '$', GBP: '£', CHF: 'CHF ' }[this.profile.base_currency] || '€';
+            return sym + Number(v).toLocaleString(this.profile.locale || 'en-IE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        },
         fmt(v)  { return v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
         signPct(v) { return v == null ? '—' : `${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(2)}%`; },
         pct(part, whole) { return (!whole) ? '0%' : `${Math.round(part / whole * 100)}%`; },
@@ -255,6 +267,78 @@ function app() {
                 await webauthnRegister(navigator.platform || 'This device');
                 alert('Passkey enrolled on this device.');
             } catch (e) { alert('Could not enrol passkey: ' + (e.message || e)); }
+        },
+
+        // ── Settings & Profile ──
+        integrations: { trade_republic: {}, enable_banking: {}, salt_edge_legacy: {}, banks: [] },
+        profile: { display_name: '', base_currency: 'EUR', locale: 'en-IE', default_tab: 'overview' },
+        aspsps: [], aspspQuery: '', aspspCountry: 'DE', aspspLoading: false, showPicker: false, settingsMsg: '',
+
+        openSettings() { this.tab = 'settings'; this.settingsMsg = ''; this.loadSettings(); },
+        openProfile()  { this.tab = 'profile';  this.settingsMsg = ''; this.loadProfile(); },
+
+        async loadSettings() {
+            try { this.integrations = await fetch('/settings/integrations').then(r => r.ok ? r.json() : this.integrations); }
+            catch (e) { console.error('Settings load failed', e); }
+        },
+
+        // Pre-fill the picker for a named bank (country codes vary per bank, so we
+        // let the user click the exact aggregator entry rather than guessing one).
+        quickPick(name) { this.aspspQuery = name; this.showPicker = true; if (!this.aspsps.length) this.loadAspsps(); },
+
+        async loadAspsps() {
+            const c = (this.aspspCountry || '').trim().toUpperCase();
+            if (c.length !== 2) { this.aspsps = []; return; }
+            this.aspspLoading = true;
+            try {
+                const d = await fetch(`/settings/banks/aspsps?country=${encodeURIComponent(c)}`).then(r => r.ok ? r.json() : { aspsps: [] });
+                this.aspsps = d.aspsps || [];
+            } catch (e) { this.aspsps = []; }
+            finally { this.aspspLoading = false; }
+        },
+        filteredAspsps() {
+            const q = (this.aspspQuery || '').toLowerCase();
+            return this.aspsps.filter(a => !q || (a.name || '').toLowerCase().includes(q)).slice(0, 50);
+        },
+
+        async connectBank(name, country) {
+            this.settingsMsg = 'Starting bank authorisation…';
+            try {
+                const r = await fetch('/settings/banks/connect', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ aspsp_name: name, country: country }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (r.ok && d.url) { window.location = d.url; }
+                else { this.settingsMsg = d.detail || 'Could not start linking.'; }
+            } catch (e) { this.settingsMsg = 'Network error starting the link.'; }
+        },
+        async unlinkBank(id) {
+            if (!confirm('Unlink this bank? Already-synced data stays, but it stops updating.')) return;
+            try { await fetch(`/settings/banks/${id}`, { method: 'DELETE' }); await this.loadSettings(); }
+            catch (e) { console.error('Unlink failed', e); }
+        },
+
+        async loadProfile() {
+            try { const p = await fetch('/settings/profile').then(r => r.ok ? r.json() : null); if (p) this.profile = p; }
+            catch (e) { console.error('Profile load failed', e); }
+        },
+        async saveProfile() {
+            this.settingsMsg = 'Saving…';
+            try {
+                const r = await fetch('/settings/profile', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.profile),
+                });
+                this.settingsMsg = r.ok ? 'Saved.' : 'Could not save.';
+            } catch (e) { this.settingsMsg = 'Could not save.'; }
+        },
+
+        sourceLabel(src) {
+            const map = { trade_republic: 'Trade Republic', revolut: 'Revolut', deutsche_bank: 'Deutsche Bank' };
+            if (map[src]) return map[src];
+            if (!src) return '—';
+            return String(src).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         },
     };
 }

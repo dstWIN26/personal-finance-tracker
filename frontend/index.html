@@ -13,7 +13,7 @@
 
 <!-- ── Top Bar ── -->
 <header class="topbar">
-    <div class="topbar-brand">Finance</div>
+    <div class="topbar-brand" x-text="profile.display_name || 'Finance'"></div>
     <nav class="topbar-nav">
         <a href="#" @click.prevent="tab='overview'"  :class="tab==='overview'  ? 'active' : ''">Overview</a>
         <a href="#" @click.prevent="tab='spending'"  :class="tab==='spending'  ? 'active' : ''">Spending</a>
@@ -30,6 +30,8 @@
         <span class="live-dot"></span>
         <span x-text="live ? (feedError ? 'Error' : 'Live') : 'Paused'"></span>
     </button>
+    <button class="icon-btn" @click="openSettings()" :class="tab==='settings' ? 'active' : ''" title="Settings & linked accounts">Settings</button>
+    <button class="icon-btn" @click="openProfile()" :class="tab==='profile' ? 'active' : ''" title="Profile & preferences">Profile</button>
     <button class="icon-btn" @click="openSessions()" title="Active sessions">Sessions</button>
     <button class="icon-btn" @click="addPasskey()" title="Enrol another passkey">+ Passkey</button>
     <button class="icon-btn" @click="logout()" title="Sign out">Sign out</button>
@@ -112,7 +114,7 @@
                             <td style="white-space:nowrap" x-text="tx.date"></td>
                             <td x-text="tx.description || '—'"></td>
                             <td><span class="tag" x-text="tx.category || 'other'"></span></td>
-                            <td style="color:var(--text-secondary)" x-text="tx.source === 'revolut' ? 'Revolut' : 'Trade Republic'"></td>
+                            <td style="color:var(--text-secondary)" x-text="sourceLabel(tx.source)"></td>
                             <td class="num" style="text-align:right;font-weight:500"
                                 :class="tx.amount < 0 ? 'negative' : 'positive'"
                                 x-text="`${tx.amount < 0 ? '−' : '+'}${eur(Math.abs(tx.amount))}`"></td>
@@ -157,8 +159,9 @@
                 <label>Account</label>
                 <select x-model="filters.source" @change="loadSpending()">
                     <option value="">All</option>
-                    <option value="revolut">Revolut</option>
-                    <option value="trade_republic">Trade Republic</option>
+                    <template x-for="a in ov.accounts" :key="a.source">
+                        <option :value="a.source" x-text="a.label || sourceLabel(a.source)"></option>
+                    </template>
                 </select>
             </div>
         </div>
@@ -215,7 +218,7 @@
                             <td style="white-space:nowrap" x-text="tx.date"></td>
                             <td x-text="tx.description || '&mdash;'"></td>
                             <td><span class="tag" x-text="tx.category || 'other'"></span></td>
-                            <td style="color:var(--text-secondary)" x-text="tx.source === 'revolut' ? 'Revolut' : 'Trade Republic'"></td>
+                            <td style="color:var(--text-secondary)" x-text="sourceLabel(tx.source)"></td>
                             <td style="text-align:right;font-weight:500"
                                 :class="tx.amount < 0 ? 'negative' : 'positive'"
                                 x-text="`&euro;${Math.abs(tx.amount).toFixed(2)}`"></td>
@@ -578,6 +581,165 @@
                     <tr x-show="sessions.length === 0"><td colspan="5" class="empty-state">No active sessions</td></tr>
                 </tbody>
             </table>
+        </div>
+    </section>
+
+    <!-- ═══════════════ SETTINGS ═══════════════ -->
+    <section x-show="tab === 'settings'">
+        <div class="section-header">
+            <h2>Settings</h2>
+            <div class="month-total-label">Linked accounts</div>
+        </div>
+
+        <!-- Broker -->
+        <div class="card">
+            <div class="card-header">Broker</div>
+            <div class="provider">
+                <div class="provider-head">
+                    <div>
+                        <div class="provider-title">Trade Republic</div>
+                        <div class="provider-sub">Portfolio &amp; transactions via the community <code>pytr</code> device pairing — keyfile auth, your PIN is never stored.</div>
+                    </div>
+                    <span class="badge" :class="integrations.trade_republic.linked ? 'badge-ok' : 'badge-off'"
+                          x-text="integrations.trade_republic.linked ? 'Linked' : 'Not linked'"></span>
+                </div>
+                <template x-if="!integrations.trade_republic.linked">
+                    <div class="notice" style="margin-top:12px">
+                        Trade Republic needs a one-time pairing <strong>on the server</strong> (it asks for your PIN and a 4-digit code — these stay on the server, never in the browser):
+                        <code class="codeblock">docker compose run --rm app python -m backend.integrations.tr_setup</code>
+                        Then set <code>TRADE_REPUBLIC_PHONE</code> in <code>.env</code>, delete any <code>TRADE_REPUBLIC_PIN</code> line, and restart with <code>docker compose up -d</code>. Your portfolio appears within ~15 minutes.
+                    </div>
+                </template>
+                <template x-if="integrations.trade_republic.linked">
+                    <div class="provider-sub" style="margin-top:8px">Paired. Re-run the pairing command only if you need to re-pair this device.</div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Bank accounts -->
+        <div class="card">
+            <div class="card-header">
+                <span>Bank accounts</span>
+                <span class="month-total-label">via Enable Banking</span>
+            </div>
+
+            <template x-if="!integrations.enable_banking.configured">
+                <div class="notice">
+                    To link banks <strong>for free</strong>, register an application at <strong>Enable Banking</strong> (free for personal use), set its redirect URL to
+                    <code x-text="integrations.enable_banking.redirect_url"></code>, save the private key to <code>keys/enablebanking_private.pem</code> on the server, and put the application id in <code>ENABLE_BANKING_APP_ID</code>. Full steps are in <code>LINKING.md</code>.
+                </div>
+            </template>
+
+            <template x-if="integrations.enable_banking.configured">
+                <div>
+                    <div class="provider-sub">You connect through your bank's own login — this app never sees your bank credentials.</div>
+                    <div class="bank-quick">
+                        <button class="btn btn-primary btn-sm" @click="quickPick('Revolut')">Connect Revolut</button>
+                        <button class="btn btn-primary btn-sm" @click="quickPick('Deutsche Bank')">Connect Deutsche Bank</button>
+                        <button class="btn btn-ghost btn-sm" @click="showPicker = !showPicker; if (showPicker && !aspsps.length) loadAspsps()">Other bank</button>
+                    </div>
+
+                    <div x-show="showPicker" style="margin-top:14px">
+                        <div class="filter-row" style="margin-bottom:10px">
+                            <div style="max-width:120px;flex:0 0 120px">
+                                <label>Country</label>
+                                <input type="text" maxlength="2" x-model="aspspCountry" @change="loadAspsps()" placeholder="DE">
+                            </div>
+                            <div>
+                                <label>Search bank</label>
+                                <input type="text" x-model="aspspQuery" placeholder="Start typing a bank name…">
+                            </div>
+                        </div>
+                        <div x-show="aspspLoading" class="loading-state">Loading banks…</div>
+                        <div class="aspsp-list" x-show="!aspspLoading && aspsps.length">
+                            <template x-for="a in filteredAspsps()" :key="a.name + a.country">
+                                <button class="aspsp-row" @click="connectBank(a.name, a.country)">
+                                    <span x-text="a.name"></span>
+                                    <span class="tag" x-text="a.country"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <div x-show="!aspspLoading && !aspsps.length" class="empty-state">No banks found — check the 2-letter country code.</div>
+                    </div>
+                </div>
+            </template>
+
+            <div class="settings-msg" x-text="settingsMsg"></div>
+
+            <div style="margin-top:8px">
+                <template x-for="b in integrations.banks" :key="b.id">
+                    <div class="provider">
+                        <div class="provider-head">
+                            <div>
+                                <div class="provider-title" x-text="b.aspsp_name + (b.aspsp_country ? ' · ' + b.aspsp_country : '')"></div>
+                                <div class="provider-sub">
+                                    <template x-for="(acc, i) in b.accounts" :key="i">
+                                        <span x-text="(acc.name || 'Account') + (acc.iban ? ' ' + acc.iban : '') + (acc.currency ? ' (' + acc.currency + ')' : '') + '   '"></span>
+                                    </template>
+                                    <span x-show="b.expires_at" x-text="'· consent until ' + (b.expires_at || '').slice(0,10)"></span>
+                                </div>
+                            </div>
+                            <div class="provider-actions">
+                                <span class="badge"
+                                      :class="b.status === 'active' ? 'badge-ok' : b.status === 'expired' ? 'badge-warn' : 'badge-off'"
+                                      x-text="b.status === 'active' ? 'Linked' : b.status === 'expired' ? 'Re-authorise' : b.status"></span>
+                                <button class="btn btn-ghost btn-sm" x-show="b.status === 'expired'" @click="connectBank(b.aspsp_name, b.aspsp_country)">Re-link</button>
+                                <button class="btn btn-ghost btn-sm" @click="unlinkBank(b.id)">Unlink</button>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <div x-show="integrations.banks.length === 0 && integrations.enable_banking.configured" class="empty-state">No banks linked yet.</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════ PROFILE ═══════════════ -->
+    <section x-show="tab === 'profile'">
+        <div class="section-header">
+            <h2>Profile</h2>
+            <div class="month-total-label">Display preferences</div>
+        </div>
+        <div class="card">
+            <div class="card-header">Preferences</div>
+            <div class="profile-form">
+                <div>
+                    <label>Display name</label>
+                    <input type="text" x-model="profile.display_name" placeholder="Finance">
+                </div>
+                <div>
+                    <label>Base currency</label>
+                    <select x-model="profile.base_currency">
+                        <option value="EUR">EUR (€)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="GBP">GBP (£)</option>
+                        <option value="CHF">CHF</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Number format</label>
+                    <select x-model="profile.locale">
+                        <option value="en-IE">1,234.56 (en-IE)</option>
+                        <option value="de-DE">1.234,56 (de-DE)</option>
+                        <option value="en-US">1,234.56 (en-US)</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Default tab on load</label>
+                    <select x-model="profile.default_tab">
+                        <option value="overview">Overview</option>
+                        <option value="spending">Spending</option>
+                        <option value="portfolio">Portfolio</option>
+                        <option value="markets">Markets</option>
+                        <option value="trading">Trading</option>
+                        <option value="limits">Limits</option>
+                    </select>
+                </div>
+                <div>
+                    <button class="btn btn-primary" @click="saveProfile()">Save preferences</button>
+                </div>
+                <div class="settings-msg" x-text="settingsMsg"></div>
+            </div>
         </div>
     </section>
 

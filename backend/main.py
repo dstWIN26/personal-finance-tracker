@@ -11,10 +11,11 @@ from apscheduler.triggers.cron import CronTrigger
 from backend.config import validate
 from backend.database import init_db
 from backend import auth, config, ratelimit
-from backend.routes import spending, portfolio, limits, market, overview, auth as auth_routes
+from backend.routes import spending, portfolio, limits, market, overview, settings, auth as auth_routes
 from backend.alerts import check_and_alert, send_daily_summary, send_weekly_portfolio
 from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
 from backend.integrations.revolut import sync_transactions as sync_revolut_transactions
+from backend.integrations.enable_banking import sync_bank_connections
 from backend.integrations.market import refresh_quotes_cache, refresh_bonds_cache
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(sync_portfolio,            "interval", minutes=15)
     scheduler.add_job(sync_tr_transactions,      "interval", hours=1)
     scheduler.add_job(sync_revolut_transactions, "interval", hours=1)
+    scheduler.add_job(sync_bank_connections,     "interval", hours=1)
     scheduler.add_job(check_and_alert,           "interval", hours=1)
     # Market-data cache warming → keeps Markets/Trading tabs instant + within rate limits
     scheduler.add_job(refresh_quotes_cache, "interval", seconds=60, id="market_quotes")
@@ -59,6 +61,7 @@ app.include_router(portfolio.router, dependencies=guard)
 app.include_router(limits.router,    dependencies=guard)
 app.include_router(market.router,    dependencies=guard)
 app.include_router(overview.router,  dependencies=guard)
+app.include_router(settings.router,  dependencies=guard)
 
 # Auth router is public; each endpoint gates itself where needed.
 app.include_router(auth_routes.router)
@@ -85,6 +88,17 @@ def healthz():
 @app.get("/login")
 def login_page():
     return FileResponse("frontend/login.html")
+
+
+@app.get("/settings/banks/callback")
+def banks_callback():
+    """Public bounce page for the bank consent redirect.
+
+    The bank's cross-site redirect cannot carry the SameSite=Strict session
+    cookie, so this tiny page (served without auth, reads no secrets) finishes
+    the link with a same-origin, session-authenticated fetch in banks-callback.js.
+    """
+    return FileResponse("frontend/banks-callback.html")
 
 
 @app.get("/")

@@ -49,12 +49,13 @@ def reset_page_guard():
 def app():
     from backend import auth
     from backend.routes import (
-        overview, spending, portfolio, limits, market, auth as auth_routes,
+        overview, spending, portfolio, limits, market, settings, auth as auth_routes,
     )
     application = FastAPI()
     application.add_middleware(auth.SecurityHeadersMiddleware)
     guard = [Depends(auth.require_session)]
-    for r in (overview.router, spending.router, portfolio.router, limits.router, market.router):
+    for r in (overview.router, spending.router, portfolio.router, limits.router,
+              market.router, settings.router):
         application.include_router(r, dependencies=guard)
     application.include_router(auth_routes.router)
 
