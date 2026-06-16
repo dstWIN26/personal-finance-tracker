@@ -34,7 +34,7 @@ def main():
     api = TradeRepublicApi(phone_no=phone, pin=pin, keyfile=KEYFILE)
 
     print("\nRequesting device pairing — a 4-digit code will be sent to your TR app...")
-    api.inititate_device_reset()  # note: pytr method name (sic)
+    api.initiate_device_reset()
     token = input("Enter the 4-digit code from your Trade Republic app: ").strip()
     api.complete_device_reset(token)
 
