@@ -4,13 +4,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from backend.config import validate
 from backend.database import init_db
-from backend import auth, config, ratelimit
+from backend import auth, config, ratelimit, assets
 from backend.routes import spending, portfolio, limits, market, overview, settings, auth as auth_routes
 from backend.alerts import check_and_alert, send_daily_summary, send_weekly_portfolio
 from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
@@ -68,7 +68,24 @@ app.include_router(settings.router,  dependencies=guard)
 # Auth router is public; each endpoint gates itself where needed.
 app.include_router(auth_routes.router)
 
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+# Asset URLs are content-versioned (?v=<hash>), so the browser/edge can keep a
+# cached copy — but we still send `no-cache` so a *changed* file (new hash, same
+# path) is always revalidated and never served stale after a deploy.
+class _RevalidatingStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", _RevalidatingStatic(directory="frontend"), name="static")
+
+# HTML shells must never be cached, so the current asset version is always seen.
+_NOCACHE = {"Cache-Control": "no-cache"}
+
+
+def _html(filename: str) -> HTMLResponse:
+    return HTMLResponse(assets.render(filename), headers=_NOCACHE)
 
 
 @app.get("/healthz")
@@ -89,7 +106,7 @@ def healthz():
 
 @app.get("/login")
 def login_page():
-    return FileResponse("frontend/login.html")
+    return _html("login.html")
 
 
 @app.get("/settings/banks/callback")
@@ -100,7 +117,7 @@ def banks_callback():
     cookie, so this tiny page (served without auth, reads no secrets) finishes
     the link with a same-origin, session-authenticated fetch in banks-callback.js.
     """
-    return FileResponse("frontend/banks-callback.html")
+    return _html("banks-callback.html")
 
 
 @app.get("/")
@@ -121,4 +138,4 @@ async def index(request: Request):
         return resp
     if action == ratelimit.THROTTLE:
         await asyncio.sleep(secs)
-    return FileResponse("frontend/index.html")
+    return _html("index.html")
