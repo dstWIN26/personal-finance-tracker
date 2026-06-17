@@ -30,6 +30,8 @@
         <span class="live-dot"></span>
         <span x-text="live ? (feedError ? 'Error' : 'Live') : 'Paused'"></span>
     </button>
+    <button class="icon-btn" @click="togglePrivacy()" :class="hideBalances ? 'active' : ''"
+            :title="hideBalances ? 'Show amounts' : 'Hide amounts (privacy)'" x-text="hideBalances ? 'Show €' : 'Hide €'"></button>
     <button class="icon-btn" @click="openSettings()" :class="tab==='settings' ? 'active' : ''" title="Settings & linked accounts">Settings</button>
     <button class="icon-btn" @click="openProfile()" :class="tab==='profile' ? 'active' : ''" title="Profile & preferences">Profile</button>
     <button class="icon-btn" @click="openSessions()" title="Active sessions">Sessions</button>
@@ -692,6 +694,67 @@
                 <div x-show="integrations.banks.length === 0 && integrations.enable_banking.configured" class="empty-state">No banks linked yet.</div>
             </div>
         </div>
+        <!-- Data sync -->
+        <div class="card">
+            <div class="card-header">
+                <span>Data sync</span>
+                <span class="month-total-label">portfolio every 15 min · rest hourly</span>
+            </div>
+            <div class="provider">
+                <div class="provider-head">
+                    <div>
+                        <div class="provider-sub">
+                            Portfolio <strong x-text="ago(integrations.last_synced.positions)"></strong>
+                            · Cash &amp; banks <strong x-text="ago(integrations.last_synced.balances)"></strong>
+                            · Transactions <strong x-text="ago(integrations.last_synced.transactions)"></strong>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" @click="syncNow()" :disabled="syncing"
+                            x-text="syncing ? 'Syncing…' : 'Sync now'"></button>
+                </div>
+                <div class="settings-msg" x-text="syncMsg"></div>
+            </div>
+        </div>
+
+        <!-- Export -->
+        <div class="card">
+            <div class="card-header">Export data</div>
+            <div class="provider-sub">Download your financial data for backups, taxes or spreadsheets — passwords and keys are never included.</div>
+            <div class="bank-quick" style="margin-top:12px">
+                <a class="btn btn-ghost btn-sm" href="/settings/export/transactions.csv">Transactions (CSV)</a>
+                <a class="btn btn-ghost btn-sm" href="/settings/export/positions.csv">Portfolio (CSV)</a>
+                <a class="btn btn-ghost btn-sm" href="/settings/export/all.json">Everything (JSON)</a>
+            </div>
+        </div>
+
+        <!-- Email alerts -->
+        <div class="card">
+            <div class="card-header">
+                <span>Email alerts</span>
+                <span class="month-total-label" x-text="alerts.email_configured ? 'SMTP configured' : 'SMTP not set up'"></span>
+            </div>
+            <template x-if="!alerts.email_configured">
+                <div class="notice">Set <code>EMAIL_FROM</code>, <code>EMAIL_TO</code> and <code>EMAIL_SMTP_PASSWORD</code> in <code>.env</code> on the server to enable e-mail alerts.</div>
+            </template>
+            <div class="profile-form" style="margin-top:6px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" x-model="alerts.security_enabled">
+                    <span>Security alerts — new sign-in, lockout, passkey changes</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" x-model="alerts.budget_enabled">
+                    <span>Budget-limit alerts — at 80% and 100% of a limit</span>
+                </label>
+                <div>
+                    <label>Send to (optional — overrides EMAIL_TO)</label>
+                    <input type="email" x-model="alerts.email_to" :placeholder="alerts.env_recipient || 'you@example.com'">
+                </div>
+                <div>
+                    <button class="btn btn-primary btn-sm" @click="saveAlerts()">Save alert settings</button>
+                    <span class="settings-msg" x-text="alertsMsg"></span>
+                </div>
+            </div>
+        </div>
     </section>
 
     <!-- ═══════════════ PROFILE ═══════════════ -->
@@ -715,6 +778,8 @@
                         <option value="GBP">GBP (£)</option>
                         <option value="CHF">CHF</option>
                     </select>
+                    <div class="provider-sub" style="margin-top:6px"
+                         x-text="profile.base_currency === 'EUR' ? 'Amounts are stored in EUR.' : ('Converted from EUR at ECB rates' + (fxDate ? ' (' + fxDate + ')' : '') + '.')"></div>
                 </div>
                 <div>
                     <label>Number format</label>

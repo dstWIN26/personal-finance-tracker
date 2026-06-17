@@ -9,6 +9,8 @@ writes a private keyfile, so it stays a server-side CLI step (tr_setup.py). This
 page only reports its status and shows the command.
 """
 import os
+import io
+import csv
 import re
 import asyncio
 import logging
@@ -16,11 +18,14 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 
+from backend import alerts
 from backend.integrations import enable_banking
 from backend.integrations.trade_republic import KEYFILE as TR_KEYFILE
 from backend.database import (
+    connect,
     create_link_state,
     consume_link_state,
     insert_bank_connection,
@@ -58,6 +63,18 @@ def _mask_iban(iban: str | None) -> str | None:
     return "••••" + iban[-4:]
 
 
+def _last_synced() -> dict:
+    """Freshest data timestamp per kind, so Settings can show 'updated N ago'."""
+    with connect() as conn:
+        def m(sql):
+            return conn.execute(sql).fetchone()[0]
+        return {
+            "positions": m("SELECT MAX(fetched_at) FROM positions"),
+            "balances": m("SELECT MAX(fetched_at) FROM balances"),
+            "transactions": m("SELECT MAX(date) FROM transactions"),
+        }
+
+
 # ── Integration status (no secrets) ──────────────────────────────────────────
 
 @router.get("/integrations")
@@ -92,7 +109,120 @@ def integrations_status():
             "configured": bool(os.getenv("SALTEDGE_CONNECTION_ID")),
         },
         "banks": banks,
+        "last_synced": _last_synced(),
     }
+
+
+# ── Manual "Sync now" ────────────────────────────────────────────────────────
+
+@router.post("/sync")
+async def sync_now():
+    """Run every data sync immediately instead of waiting for the scheduler.
+
+    Sources are synced one at a time (SQLite is single-writer) and each is time-
+    boxed, so an unconfigured or slow provider can't hang the request. Providers
+    that aren't set up degrade to a no-op inside their own sync function.
+    """
+    from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
+    from backend.integrations.revolut import sync_transactions as sync_revolut
+    from backend.integrations.enable_banking import sync_bank_connections as sync_banks
+
+    jobs = {
+        "trade_republic_portfolio": sync_portfolio,
+        "trade_republic_transactions": sync_tr_transactions,
+        "revolut": sync_revolut,
+        "banks": sync_banks,
+    }
+    results = {}
+    for name, fn in jobs.items():
+        try:
+            await asyncio.wait_for(fn(), timeout=90)
+            results[name] = "ok"
+        except Exception as exc:  # noqa: BLE001 — one bad source must not fail the rest
+            logger.warning("manual sync '%s' failed: %s", name, type(exc).__name__)
+            results[name] = "error"
+    return {"results": results, "last_synced": _last_synced()}
+
+
+# ── Data export (financial data only — never auth/secrets) ───────────────────
+
+def _csv(columns: list[str], rows, filename: str) -> Response:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(columns)
+    for r in rows:
+        writer.writerow([r[c] for c in columns])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_LATEST_POSITIONS = (
+    "SELECT isin, name, quantity, buy_price, current_price, pl_pct, pl_eur, fetched_at "
+    "FROM positions WHERE id IN (SELECT MAX(id) FROM positions GROUP BY isin) ORDER BY name"
+)
+
+
+@router.get("/export/transactions.csv")
+def export_transactions():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source, date, description, category, amount, currency "
+            "FROM transactions ORDER BY date DESC, id DESC"
+        ).fetchall()
+    return _csv(["source", "date", "description", "category", "amount", "currency"],
+                rows, "transactions.csv")
+
+
+@router.get("/export/positions.csv")
+def export_positions():
+    with connect() as conn:
+        rows = conn.execute(_LATEST_POSITIONS).fetchall()
+    return _csv(["isin", "name", "quantity", "buy_price", "current_price", "pl_pct", "pl_eur", "fetched_at"],
+                rows, "portfolio.csv")
+
+
+@router.get("/export/all.json")
+def export_all():
+    with connect() as conn:
+        data = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "transactions": [dict(r) for r in conn.execute(
+                "SELECT source, date, description, category, amount, currency FROM transactions ORDER BY date").fetchall()],
+            "positions": [dict(r) for r in conn.execute(_LATEST_POSITIONS).fetchall()],
+            "balances": [dict(r) for r in conn.execute(
+                "SELECT source, balance, currency, fetched_at FROM balances ORDER BY fetched_at").fetchall()],
+            "limits": [dict(r) for r in conn.execute(
+                "SELECT category, amount, period FROM limits").fetchall()],
+        }
+    return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="finance-export.json"'})
+
+
+# ── Email-alert preferences ──────────────────────────────────────────────────
+
+@router.get("/alerts")
+def get_alerts():
+    saved = get_all_settings()
+    return {
+        "email_configured": alerts.email_configured(),
+        "env_recipient": os.getenv("EMAIL_TO", ""),
+        "security_enabled": saved.get("alerts_security_enabled", "1") != "0",
+        "budget_enabled": saved.get("alerts_budget_enabled", "1") != "0",
+        "email_to": saved.get("alerts_email_to", ""),
+    }
+
+
+@router.post("/alerts")
+def save_alerts(prefs: dict):
+    if "security_enabled" in prefs:
+        set_setting("alerts_security_enabled", "1" if prefs["security_enabled"] else "0")
+    if "budget_enabled" in prefs:
+        set_setting("alerts_budget_enabled", "1" if prefs["budget_enabled"] else "0")
+    if "email_to" in prefs:
+        set_setting("alerts_email_to", str(prefs.get("email_to") or "").strip()[:200])
+    return {"status": "ok"}
 
 
 # ── Bank linking (Enable Banking consent flow) ───────────────────────────────

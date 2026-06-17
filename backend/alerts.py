@@ -8,20 +8,43 @@ from backend.database import connect
 
 logger = logging.getLogger(__name__)
 
-def send_email(subject: str, html_body: str):
+def send_email(subject: str, html_body: str, to: str | None = None):
+    to = to or os.environ["EMAIL_TO"]
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = os.environ["EMAIL_FROM"]
-    msg["To"] = os.environ["EMAIL_TO"]
+    msg["To"] = to
     msg.attach(MIMEText(html_body, "html"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(os.environ["EMAIL_FROM"], os.environ["EMAIL_SMTP_PASSWORD"])
-        server.sendmail(os.environ["EMAIL_FROM"], os.environ["EMAIL_TO"], msg.as_string())
+        server.sendmail(os.environ["EMAIL_FROM"], to, msg.as_string())
 
 
 def email_configured() -> bool:
     return all(os.getenv(k) for k in ("EMAIL_FROM", "EMAIL_TO", "EMAIL_SMTP_PASSWORD"))
+
+
+# In-app alert preferences (Settings → Email alerts). Default ON so security
+# notifications keep working unless the owner deliberately turns them off.
+_ALERT_SETTING = {"security": "alerts_security_enabled", "budget": "alerts_budget_enabled"}
+
+
+def alert_enabled(kind: str) -> bool:
+    from backend.database import get_setting
+    key = _ALERT_SETTING.get(kind)
+    return True if key is None else get_setting(key, "1") != "0"
+
+
+def recipient() -> str:
+    """Where alerts go: the in-app override if set, else EMAIL_TO from the env."""
+    from backend.database import get_setting
+    return (get_setting("alerts_email_to", "") or os.getenv("EMAIL_TO", "")).strip()
+
+
+def _dashboard_url() -> str:
+    from backend import config
+    return config.RP_ORIGIN or "https://localhost"
 
 
 def send_security_alert(event: str, when: str, ip: str, user_agent: str,
@@ -32,6 +55,9 @@ def send_security_alert(event: str, when: str, ip: str, user_agent: str,
     thread (see auth.notify)."""
     if not email_configured():
         logger.info("Security event '%s' — e-mail not configured, skipping alert", event)
+        return
+    if not alert_enabled("security"):
+        logger.info("Security alerts disabled in settings — skipping '%s'", event)
         return
     from backend import config
     color = "#e53e3e" if warn else "#3b82f6"
@@ -63,7 +89,7 @@ def send_security_alert(event: str, when: str, ip: str, user_agent: str,
     </body></html>
     """
     try:
-        send_email(f"🔐 Finance Tracker — {event}", body)
+        send_email(f"🔐 Finance Tracker — {event}", body, to=recipient())
         logger.info("Security alert e-mailed: %s", event)
     except Exception:
         logger.exception("Failed to send security alert e-mail for '%s'", event)
@@ -71,6 +97,8 @@ def send_security_alert(event: str, when: str, ip: str, user_agent: str,
 
 def check_and_alert():
     """Check all limits; send emails for 80% and 100% thresholds (once per threshold per month)."""
+    if not email_configured() or not alert_enabled("budget"):
+        return
     month = date.today().strftime("%Y-%m")
     with connect() as conn:
         limits = conn.execute("SELECT * FROM limits").fetchall()
@@ -139,12 +167,12 @@ def _send_limit_alert(label: str, spent: float, limit: float, pct: float, thresh
             </div>
         </div>
         <p style="color:#718096; margin-top:20px; font-size:14px">
-            Open your <a href="http://localhost:8000">finance dashboard</a> to review and adjust limits.
+            Open your <a href="{_dashboard_url()}">finance dashboard</a> to review and adjust limits.
         </p>
     </div>
     </body></html>
     """
-    send_email(subject, body)
+    send_email(subject, body, to=recipient())
 
 def send_daily_summary():
     """Optional daily spending summary email."""

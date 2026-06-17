@@ -133,3 +133,73 @@ def test_connect_then_complete_links_bank(auth_client, monkeypatch):
 def test_complete_with_unknown_state_is_rejected(auth_client):
     r = auth_client.post("/settings/banks/complete", json={"code": "x", "state": "nope"})
     assert r.status_code == 400
+
+
+# ── Sync status / Sync now ───────────────────────────────────────────────────
+
+def test_integrations_reports_last_synced(auth_client):
+    d = auth_client.get("/settings/integrations").json()
+    assert set(d["last_synced"]) == {"positions", "balances", "transactions"}
+
+
+def test_sync_now_runs_each_source_and_isolates_failures(auth_client, monkeypatch):
+    import backend.integrations.trade_republic as tr
+    import backend.integrations.revolut as rev
+    import backend.integrations.enable_banking as eb2
+
+    async def ok():
+        return None
+
+    async def boom():
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(tr, "sync_portfolio", ok)
+    monkeypatch.setattr(tr, "sync_tr_transactions", ok)
+    monkeypatch.setattr(rev, "sync_transactions", boom)
+    monkeypatch.setattr(eb2, "sync_bank_connections", ok)
+
+    r = auth_client.post("/settings/sync")
+    assert r.status_code == 200
+    res = r.json()["results"]
+    assert res["trade_republic_portfolio"] == "ok"
+    assert res["banks"] == "ok"
+    assert res["revolut"] == "error"               # one bad source doesn't fail the rest
+    assert "last_synced" in r.json()
+
+
+# ── Export ───────────────────────────────────────────────────────────────────
+
+def test_export_transactions_csv(auth_client):
+    db.insert_transaction(source="revolut", date="2026-06-01",
+                          description="Coffee", category="food", amount=-3.5)
+    r = auth_client.get("/settings/export/transactions.csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    lines = r.text.strip().splitlines()
+    assert lines[0] == "source,date,description,category,amount,currency"
+    assert any("Coffee" in ln for ln in lines[1:])
+
+
+def test_export_all_json_has_no_secrets(auth_client):
+    r = auth_client.get("/settings/export/all.json")
+    assert r.status_code == 200
+    d = r.json()
+    for k in ("exported_at", "transactions", "positions", "balances", "limits"):
+        assert k in d
+    body = r.text.lower()
+    for leak in ("password", "token_hash", "credential", "session"):
+        assert leak not in body
+
+
+# ── Email-alert preferences ──────────────────────────────────────────────────
+
+def test_alerts_settings_roundtrip(auth_client):
+    base = auth_client.get("/settings/alerts").json()
+    assert base["security_enabled"] is True and base["budget_enabled"] is True
+    auth_client.post("/settings/alerts",
+                     json={"security_enabled": False, "budget_enabled": True, "email_to": "me@example.com"})
+    out = auth_client.get("/settings/alerts").json()
+    assert out["security_enabled"] is False
+    assert out["budget_enabled"] is True
+    assert out["email_to"] == "me@example.com"

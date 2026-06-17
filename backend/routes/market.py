@@ -34,6 +34,12 @@ async def vix():
     return await market.get_vix() or {}
 
 
+@router.get("/fx")
+async def fx():
+    """EUR-base daily FX rates, used to render amounts in the chosen base currency."""
+    return await market.get_fx_rates()
+
+
 @router.get("/quotes")
 async def quotes(symbols: str = Query(..., description="Comma-separated symbols")):
     wanted = [s for s in (symbols.split(",")) if s in _ALLOWED]

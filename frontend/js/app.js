@@ -41,6 +41,7 @@ function app() {
             // Honour ?tab= (the bank-link callback returns to /?tab=settings).
             const forcedTab = new URLSearchParams(location.search).get('tab');
             if (forcedTab) this.tab = forcedTab;
+            this.hideBalances = localStorage.getItem('hideBalances') === '1';
             await Promise.all([
                 this.loadSpending(),
                 this.loadPortfolio(),
@@ -48,6 +49,7 @@ function app() {
                 this.loadOverview(),
                 this.loadMarkets(),
                 this.loadProfile(),
+                this.loadFx(),
             ]);
             await this.loadTrading();
             if (forcedTab === 'settings') this.loadSettings();
@@ -217,12 +219,19 @@ function app() {
         },
 
         // ── Formatting helpers ──
+        // Amounts are stored in EUR. We convert to the chosen base currency with
+        // the live ECB rate; if that rate is missing we fall back to EUR so we
+        // never show a wrong number under the wrong symbol.
         eur(v)  {
             if (v == null) return '—';
-            const sym = { EUR: '€', USD: '$', GBP: '£', CHF: 'CHF ' }[this.profile.base_currency] || '€';
-            return sym + Number(v).toLocaleString(this.profile.locale || 'en-IE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            if (this.hideBalances) return '••••';
+            let cur = this.profile.base_currency || 'EUR';
+            let rate = this.fxRates[cur];
+            if (!rate) { cur = 'EUR'; rate = 1; }
+            const sym = { EUR: '€', USD: '$', GBP: '£', CHF: 'CHF ' }[cur] || '€';
+            return sym + Number(v * rate).toLocaleString(this.profile.locale || 'en-IE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
-        fmt(v)  { return v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+        fmt(v)  { return v == null ? '—' : Number(v).toLocaleString(this.profile.locale || 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
         signPct(v) { return v == null ? '—' : `${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(2)}%`; },
         pct(part, whole) { return (!whole) ? '0%' : `${Math.round(part / whole * 100)}%`; },
         bp(v)   { return v == null ? '—' : v.toFixed(2) + '%'; },
@@ -270,16 +279,76 @@ function app() {
         },
 
         // ── Settings & Profile ──
-        integrations: { trade_republic: {}, enable_banking: {}, salt_edge_legacy: {}, banks: [] },
+        integrations: { trade_republic: {}, enable_banking: {}, salt_edge_legacy: {}, banks: [], last_synced: {} },
         profile: { display_name: '', base_currency: 'EUR', locale: 'en-IE', default_tab: 'overview' },
         aspsps: [], aspspQuery: '', aspspCountry: 'DE', aspspLoading: false, showPicker: false, settingsMsg: '',
+        syncing: false, syncMsg: '',
+        alerts: { security_enabled: true, budget_enabled: true, email_to: '', email_configured: false, env_recipient: '' },
+        alertsMsg: '',
+        // FX (EUR-base ECB rates) + privacy
+        fxRates: { EUR: 1 }, fxDate: null,
+        hideBalances: false,
 
-        openSettings() { this.tab = 'settings'; this.settingsMsg = ''; this.loadSettings(); },
+        openSettings() { this.tab = 'settings'; this.settingsMsg = ''; this.loadSettings(); this.loadAlerts(); },
         openProfile()  { this.tab = 'profile';  this.settingsMsg = ''; this.loadProfile(); },
 
         async loadSettings() {
             try { this.integrations = await fetch('/settings/integrations').then(r => r.ok ? r.json() : this.integrations); }
             catch (e) { console.error('Settings load failed', e); }
+        },
+
+        // ── FX + privacy ──
+        async loadFx() {
+            try {
+                const d = await fetch('/market/fx').then(r => r.ok ? r.json() : null);
+                if (d && d.rates) { this.fxRates = d.rates; this.fxDate = d.date; }
+            } catch (e) { /* keep EUR fallback */ }
+        },
+        togglePrivacy() {
+            this.hideBalances = !this.hideBalances;
+            localStorage.setItem('hideBalances', this.hideBalances ? '1' : '0');
+        },
+
+        // ── Sync status + manual sync ──
+        ago(ts) {
+            if (!ts) return 'never';
+            const t = new Date(String(ts).replace(' ', 'T') + (String(ts).includes('Z') ? '' : 'Z'));
+            const s = Math.max(0, (Date.now() - t.getTime()) / 1000);
+            if (s < 90) return 'just now';
+            if (s < 5400) return Math.round(s / 60) + ' min ago';
+            if (s < 172800) return Math.round(s / 3600) + ' h ago';
+            return Math.round(s / 86400) + ' d ago';
+        },
+        async syncNow() {
+            this.syncing = true; this.syncMsg = 'Syncing all sources…';
+            try {
+                const d = await fetch('/settings/sync', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+                if (d.last_synced) this.integrations.last_synced = d.last_synced;
+                const failed = Object.entries(d.results || {}).filter(([, v]) => v === 'error').map(([k]) => k);
+                this.syncMsg = failed.length ? ('Done — these did not update: ' + failed.join(', ')) : 'All sources synced.';
+                await Promise.all([this.loadOverview(), this.loadPortfolio(), this.loadSpending(), this.loadSettings()]);
+            } catch (e) { this.syncMsg = 'Sync failed.'; }
+            finally { this.syncing = false; }
+        },
+
+        // ── Email-alert preferences ──
+        async loadAlerts() {
+            try { const a = await fetch('/settings/alerts').then(r => r.ok ? r.json() : null); if (a) this.alerts = a; }
+            catch (e) { /* ignore */ }
+        },
+        async saveAlerts() {
+            this.alertsMsg = 'Saving…';
+            try {
+                const r = await fetch('/settings/alerts', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        security_enabled: this.alerts.security_enabled,
+                        budget_enabled: this.alerts.budget_enabled,
+                        email_to: this.alerts.email_to,
+                    }),
+                });
+                this.alertsMsg = r.ok ? 'Saved.' : 'Could not save.';
+            } catch (e) { this.alertsMsg = 'Could not save.'; }
         },
 
         // Pre-fill the picker for a named bank (country codes vary per bank, so we

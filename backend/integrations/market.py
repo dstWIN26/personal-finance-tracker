@@ -23,6 +23,7 @@ import asyncio
 import logging
 import csv
 import io
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -364,6 +365,39 @@ async def get_bonds() -> dict:
         return {"us": us, "eu": eu, "spreads": spreads}
 
     return await _cached("bonds", 1800, produce)    # yields update daily → 30 min TTL
+
+
+# ── FX (ECB euro reference rates — keyless, EUR base) ─────────────────────────
+ECB_FXREF = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+_FX_TTL = 6 * 3600          # ECB publishes once per working day (~16:00 CET)
+
+
+def _parse_ecb_fx(xml_text: str) -> dict:
+    """Parse the ECB daily XML into {base, date, rates}. Rates are EUR→currency,
+    so 1 EUR = rates[CUR] units of CUR. EUR itself is always 1.0."""
+    root = ET.fromstring(xml_text)
+    rates = {"EUR": 1.0}
+    fx_date = None
+    for el in root.iter():
+        if el.attrib.get("time"):
+            fx_date = el.attrib["time"]
+        cur, rate = el.attrib.get("currency"), el.attrib.get("rate")
+        if cur and rate:
+            try:
+                rates[cur] = float(rate)
+            except ValueError:
+                pass
+    return {"base": "EUR", "date": fx_date, "rates": rates}
+
+
+async def get_fx_rates() -> dict:
+    """Daily EUR-base FX rates. Cached; serves last-good on a transient failure."""
+    async def produce():
+        async with httpx.AsyncClient(timeout=15, headers=_UA) as client:
+            r = await client.get(ECB_FXREF)
+            r.raise_for_status()
+            return _parse_ecb_fx(r.text)
+    return await _cached("fx", _FX_TTL, produce)
 
 
 # ── Scheduler jobs (called from main.py's APScheduler) ────────────────────────
