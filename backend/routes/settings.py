@@ -4,20 +4,22 @@ Two jobs:
   1. Report integration link status WITHOUT ever returning a secret or credential.
   2. Drive the bank-linking consent flow (Enable Banking) and store non-secret prefs.
 
-Trade Republic linking is deliberately NOT exposed here: it needs a PIN + OTP and
-saves an authenticated web session (cookies), so it stays a server-side CLI step
-(tr_setup.py). This page only reports its status and shows the command.
+Trade Republic blocks automated login at its edge (no working unofficial API), so
+instead of pairing we let the user IMPORT their own exported transactions CSV here
+(see import_transactions). The tr_setup.py pairing path is kept but is expected to
+fail against TR's current defenses.
 """
 import os
 import io
 import csv
 import re
+import json
 import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 
@@ -198,6 +200,181 @@ def export_all():
                 "SELECT category, amount, period FROM limits").fetchall()],
         }
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="finance-export.json"'})
+
+
+# ── Import (Trade Republic / generic CSV → transactions) ─────────────────────
+# Trade Republic actively blocks automated login, so instead of scraping we import
+# the user's OWN exported transactions file (TR app/web → Transactions → Export, or
+# a community PDF→CSV converter). Columns are matched by meaning rather than a fixed
+# schema, because every exporter labels them slightly differently.
+
+_MAX_IMPORT_BYTES = 8 * 1024 * 1024     # plenty for many years of transactions
+_MAX_IMPORT_ROWS = 50_000
+
+# Header aliases (lowercased) — English + German + common converter labels.
+_COL_DATE = {"date", "datum", "timestamp", "time", "datetime", "value date", "valuedate",
+             "booking date", "buchungstag", "completed date", "date completed", "valuta"}
+_COL_AMOUNT = {"amount", "betrag", "value", "wert", "total", "amount (eur)", "betrag (eur)",
+               "amount in eur", "net amount"}
+_COL_IN = {"inflow", "inflows", "credit", "eingang", "money in", "deposit", "gutschrift"}
+_COL_OUT = {"outflow", "outflows", "debit", "ausgang", "money out", "withdrawal", "belastung"}
+_COL_DESC = {"description", "beschreibung", "title", "titel", "name", "note", "notes",
+             "reference", "verwendungszweck", "details", "detail", "payee", "merchant", "subtitle"}
+_COL_TYPE = {"type", "typ", "category", "kategorie", "transaction type", "art",
+             "event type", "eventtype"}
+_COL_CCY = {"currency", "währung", "waehrung", "ccy"}
+
+
+def _pick(headers_lower: dict, aliases: set):
+    """Return the original header whose lowercased form is in `aliases`, else None."""
+    for low, orig in headers_lower.items():
+        if low in aliases:
+            return orig
+    return None
+
+
+def _to_amount(raw):
+    """Parse a money string to float, tolerant of locale: '1.234,56', '1234.56',
+    '-12,30', '€ 1.000,00', '1,000.00', '(12.30)' (negative). None if unparseable."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    neg = s.startswith("(") and s.endswith(")")
+    if neg:
+        s = s[1:-1]
+    s = re.sub(r"[^0-9,.\-]", "", s)        # strip currency symbols / spaces / NBSP
+    if not s or s in {"-", ".", ","}:
+        return None
+    if "," in s and "." in s:               # both present: the LAST separator is decimal
+        if s.rfind(",") > s.rfind("."):     # European 1.234,56
+            s = s.replace(".", "").replace(",", ".")
+        else:                               # US 1,234.56
+            s = s.replace(",", "")
+    elif "," in s:                          # only commas
+        if s.count(",") == 1 and len(s.split(",")[1]) in (1, 2):
+            s = s.replace(",", ".")         # decimal comma
+        else:
+            s = s.replace(",", "")          # thousands
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return -v if neg else v
+
+
+def _to_date(raw):
+    """Parse common date formats to 'YYYY-MM-DD'. None if unparseable."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)          # ISO (optionally with time)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.match(r"(\d{1,2})[./](\d{1,2})[./](\d{2,4})", s)   # D.M.Y / D/M/Y (EU: day-first)
+    if m:
+        d, mo, y = m.groups()
+        y = "20" + y if len(y) == 2 else y
+        try:
+            return datetime(int(y), int(mo), int(d)).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+    if re.fullmatch(r"\d{10}(\d{3})?", s):              # epoch seconds or millis
+        ts = int(s)
+        if len(s) == 13:
+            ts //= 1000
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        except (ValueError, OSError, OverflowError):
+            return None
+    return None
+
+
+@router.post("/import/transactions")
+async def import_transactions(file: UploadFile = File(...)):
+    """Import a Trade Republic (or generic) transactions CSV under
+    source='trade_republic'. Columns are matched by meaning, locale number/date
+    formats are handled, and the table's UNIQUE constraint dedupes — so importing
+    the same file twice is safe (already-present rows are skipped). The file is
+    parsed in memory, never written to disk, and its contents are never logged.
+    """
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large (max 8 MB).")
+    if not raw:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The file is empty.")
+    try:
+        text = raw.decode("utf-8-sig")                  # also strips a UTF-8 BOM
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", errors="replace")
+
+    sample = text[:4096]
+    try:
+        delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+    except csv.Error:
+        first = (sample.splitlines() or [""])[0]
+        delim = max(",;\t", key=first.count) if first else ","
+
+    reader = csv.DictReader(io.StringIO(text), delimiter=delim)
+    if not reader.fieldnames:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Could not read a header row.")
+    headers_lower = {(h or "").strip().lower(): h for h in reader.fieldnames}
+
+    col = {k: _pick(headers_lower, a) for k, a in (
+        ("date", _COL_DATE), ("amount", _COL_AMOUNT), ("inflow", _COL_IN),
+        ("outflow", _COL_OUT), ("description", _COL_DESC), ("type", _COL_TYPE),
+        ("currency", _COL_CCY))}
+    detected = {**col, "delimiter": delim}
+
+    if not col["date"] or not (col["amount"] or col["inflow"] or col["outflow"]):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Couldn't find a date and an amount column. Headers found: "
+            + ", ".join(h for h in reader.fieldnames if h))
+
+    imported = skipped = errors = total = negatives = 0
+    with connect() as conn:
+        for row in reader:
+            total += 1
+            if total > _MAX_IMPORT_ROWS:
+                break
+            try:
+                date = _to_date(row.get(col["date"]))
+                if col["amount"]:
+                    amount = _to_amount(row.get(col["amount"]))
+                else:
+                    inflow = _to_amount(row.get(col["inflow"])) if col["inflow"] else 0.0
+                    outflow = _to_amount(row.get(col["outflow"])) if col["outflow"] else 0.0
+                    amount = (inflow or 0.0) - abs(outflow or 0.0)
+                if date is None or amount is None:
+                    errors += 1
+                    continue
+                description = ((str(row.get(col["description"]) or "").strip()
+                               if col["description"] else "")[:300]) or "Trade Republic"
+                category = (str(row.get(col["type"]) or "").strip() if col["type"] else "") or None
+                ccy = row.get(col["currency"]) if col["currency"] else None
+                currency = str(ccy).strip().upper()[:3] if ccy else "EUR"
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO transactions "
+                    "(source, date, description, category, amount, currency, raw_json) "
+                    "VALUES ('trade_republic', ?, ?, ?, ?, ?, ?)",
+                    [date, description, category, amount, currency, json.dumps(row)])
+                if cur.rowcount:
+                    imported += 1
+                    if amount < 0:
+                        negatives += 1
+                else:
+                    skipped += 1
+            except Exception:  # noqa: BLE001 — one bad row must not abort the whole import
+                errors += 1
+
+    logger.info("TR CSV import: %d imported, %d duplicates, %d errors, %d rows",
+                imported, skipped, errors, total)
+    return {"imported": imported, "skipped": skipped, "errors": errors,
+            "total": total, "spending_rows": negatives, "detected": detected}
 
 
 # ── Email-alert preferences ──────────────────────────────────────────────────

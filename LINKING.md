@@ -13,67 +13,43 @@ on the host.
 
 ---
 
-## Trade Republic (portfolio + transactions) — using `pytr`
+## Trade Republic (transactions) — CSV import
 
-Trade Republic has no official API, so the app uses the community `pytr` library
-with **device pairing**: you pair once, a private keyfile is written, and every
-later sync authenticates with that keyfile — your **PIN is never stored**.
+Trade Republic has no official API, and as of 2025 it **actively blocks** the
+community `pytr` library at its edge (the login endpoint returns a hard `405`,
+confirmed from both datacenter and residential IPs — there's no token, browser
+fingerprint, or header that gets past it). So this app does **not** try to log in
+to Trade Republic. Instead you **import your own exported transactions** — no
+scraping, nothing against TR's terms, and it keeps working no matter how TR
+changes their app.
 
-There are exactly **two pieces of information you type**, and they go in different places:
+### Step 1 — export your transactions from Trade Republic
 
-| Info | Where it goes | Stored? |
-|---|---|---|
-| Your **phone number** (`+49…`) | the **`.env`** file (one line) | yes (it's not secret) |
-| Your **PIN** + the **4-digit code** TR pushes to your app | typed at the **prompt** when you run the pairing command | **no** — never written to disk |
+In the Trade Republic **app** or at **app.traderepublic.com**, open your
+**Transactions** view and use **Export** to download a **CSV** (some versions also
+offer Excel/JSON — CSV is best here). If your version has no export button, a
+community PDF→CSV converter of your monthly statement also works.
 
-### Step 1 — put your phone number in `.env`
+### Step 2 — import it in the app
 
-Open the file `.env` in the project root (`personal-finance-tracker/.env`) in any
-text editor and find the line that starts with `TRADE_REPUBLIC_PHONE`. Set it to
-your real number (international format, no spaces):
+1. Open the app, sign in, go to **Settings → Broker → Trade Republic**.
+2. Click **Choose file**, pick the CSV, and press **Import CSV**.
+3. You'll see e.g. *"Imported 142 new transaction(s), skipped 0 duplicate(s)."*
+   The **Overview** and **Spending** tabs update immediately.
 
-```ini
-TRADE_REPUBLIC_PHONE=+491701234567
-```
+The importer matches columns by meaning (it understands English and German
+headers, `;` or `,` delimiters, and European number/date formats like `1.234,56`
+and `01.05.2026`), and the database **dedupes** automatically — so you can
+re-import the same file, or overlapping date ranges, and only genuinely new rows
+are added. Outflows become spending (negative), inflows become income (positive).
 
-If there is a `TRADE_REPUBLIC_PIN=` line, **leave it commented out / blank** — you do
-*not* put your PIN in the file. (`.env` is gitignored, so nothing here is committed.)
+> Tip: re-export and re-import whenever you want fresh data — it's safe to repeat.
+> If the import reports rows it "couldn't read", send the file's header row and I
+> can extend the column matching.
 
-### Step 2 — run the one-time pairing (you type your PIN + the code here)
-
-Run **one** of the following from the project root. It will prompt for your PIN, then
-for the 4-digit code Trade Republic sends to your phone app:
-
-```bash
-# Local (running with a virtualenv, no Docker):
-python -m backend.integrations.tr_setup
-
-# Or, if you run the app with Docker:
-docker compose run --rm app python -m backend.integrations.tr_setup
-```
-
-On success it logs in via Trade Republic's web flow (solving their anti-bot
-challenge in pure Python — no browser needed) and writes `keys/tr_cookies.txt`
-(the saved web session) then prints `✅ Paired.` Nothing you typed at the prompt is saved.
-
-### Step 3 — restart so the scheduler picks it up
-
-```bash
-# Local:
-uvicorn backend.main:app --reload      # (or however you start it)
-# Docker:
-docker compose up -d
-```
-
-Within ~15 min the **Portfolio** tab and **Overview** net worth populate (portfolio
-syncs every 15 min, transactions hourly; restart once more to pull immediately).
-The **Settings** page will then show Trade Republic as **Linked**.
-
-**Security notes**
-- The cookies file is the credential — keep `keys/` private (`chmod 600 keys/tr_cookies.txt`); it's gitignored.
-- To revoke: reset paired devices in the Trade Republic app, and delete the cookies file.
-- Web sessions expire periodically — if syncs log `session expired`, just re-run the pairing command.
-- `pytr` 0.4.9 is unofficial; it logs in via TR's web API.
+**Note on portfolio holdings:** this imports cash/transaction history. Live
+position prices still come from the Markets data feed; current TR *holdings* are
+not derived from the CSV yet.
 
 ---
 

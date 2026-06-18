@@ -283,6 +283,7 @@ function app() {
         profile: { display_name: '', base_currency: 'EUR', locale: 'en-IE', default_tab: 'overview' },
         aspsps: [], aspspQuery: '', aspspCountry: 'DE', aspspLoading: false, showPicker: false, settingsMsg: '',
         syncing: false, syncMsg: '',
+        trImporting: false, trImportMsg: '',
         alerts: { security_enabled: true, budget_enabled: true, email_to: '', email_configured: false, env_recipient: '' },
         alertsMsg: '',
         // FX (EUR-base ECB rates) + privacy
@@ -329,6 +330,30 @@ function app() {
                 await Promise.all([this.loadOverview(), this.loadPortfolio(), this.loadSpending(), this.loadSettings()]);
             } catch (e) { this.syncMsg = 'Sync failed.'; }
             finally { this.syncing = false; }
+        },
+
+        // ── Trade Republic CSV import (TR blocks automated login) ──
+        async importTr() {
+            const input = this.$refs.trFile;
+            if (!input || !input.files || !input.files.length) {
+                this.trImportMsg = 'Choose your Trade Republic CSV first.'; return;
+            }
+            this.trImporting = true; this.trImportMsg = 'Importing…';
+            try {
+                const fd = new FormData();
+                fd.append('file', input.files[0]);
+                const r = await fetch('/settings/import/transactions', { method: 'POST', body: fd });
+                const d = await r.json().catch(() => ({}));
+                if (r.ok) {
+                    this.trImportMsg = `Imported ${d.imported} new transaction(s), skipped ${d.skipped} duplicate(s)`
+                        + (d.errors ? `, ${d.errors} row(s) couldn't be read.` : '.');
+                    input.value = '';
+                    await Promise.all([this.loadOverview(), this.loadSpending(), this.loadSettings()]);
+                } else {
+                    this.trImportMsg = d.detail || 'Import failed.';
+                }
+            } catch (e) { this.trImportMsg = 'Import failed (network error).'; }
+            finally { this.trImporting = false; }
         },
 
         // ── Email-alert preferences ──

@@ -192,6 +192,75 @@ def test_export_all_json_has_no_secrets(auth_client):
         assert leak not in body
 
 
+# ── Trade Republic CSV import ─────────────────────────────────────────────────
+
+def _import(auth_client, text, name="tr.csv"):
+    return auth_client.post("/settings/import/transactions",
+                            files={"file": (name, text.encode("utf-8"), "text/csv")})
+
+
+def test_import_requires_auth(client):
+    r = client.post("/settings/import/transactions",
+                    files={"file": ("tr.csv", b"date,amount\n2026-01-01,1\n", "text/csv")})
+    assert r.status_code == 401
+
+
+def test_import_eu_format_semicolons_dates_and_signs(auth_client):
+    # German dates, semicolon delimiter, European decimals, signed amount column.
+    text = ("Date;Type;Description;Amount;Currency\r\n"
+            "01.05.2026;Card;Coffee Shop;-3,50;EUR\r\n"
+            "02.05.2026;Deposit;Salary;1.234,56;EUR\r\n")
+    r = _import(auth_client, text)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["imported"] == 2 and d["skipped"] == 0 and d["errors"] == 0
+    assert d["spending_rows"] == 1                      # the -3,50 outflow
+
+    with db.connect() as conn:
+        rows = {row["description"]: row for row in conn.execute(
+            "SELECT description, date, amount, currency, source, category FROM transactions").fetchall()}
+    assert rows["Coffee Shop"]["amount"] == -3.5        # sign preserved -> shows as spending
+    assert rows["Coffee Shop"]["date"] == "2026-05-01"  # DD.MM.YYYY -> ISO
+    assert rows["Coffee Shop"]["source"] == "trade_republic"
+    assert rows["Coffee Shop"]["category"] == "Card"
+    assert rows["Salary"]["amount"] == 1234.56          # 1.234,56 -> 1234.56
+
+
+def test_import_is_idempotent(auth_client):
+    text = "date,description,amount\n2026-05-01,Coffee,-3.50\n"
+    assert _import(auth_client, text).json()["imported"] == 1
+    again = _import(auth_client, text).json()
+    assert again["imported"] == 0 and again["skipped"] == 1   # UNIQUE constraint dedupes
+
+
+def test_import_inflow_outflow_split(auth_client):
+    text = ("date,description,inflow,outflow\n"
+            "2026-05-01,Buy AAPL,,100.00\n"
+            "2026-05-02,Dividend,5.00,\n")
+    r = _import(auth_client, text)
+    assert r.status_code == 200 and r.json()["imported"] == 2
+    with db.connect() as conn:
+        amounts = {row["description"]: row["amount"] for row in conn.execute(
+            "SELECT description, amount FROM transactions").fetchall()}
+    assert amounts["Buy AAPL"] == -100.0                # outflow -> negative
+    assert amounts["Dividend"] == 5.0                   # inflow -> positive
+
+
+def test_import_rejects_file_without_date_or_amount(auth_client):
+    r = _import(auth_client, "foo,bar\n1,2\n")
+    assert r.status_code == 422
+    assert "date" in r.json()["detail"].lower()
+
+
+def test_import_skips_unparseable_rows_without_failing(auth_client):
+    text = ("date,description,amount\n"
+            "2026-05-01,Good,-1.00\n"
+            "not-a-date,Bad date,-2.00\n"
+            "2026-05-03,Bad amount,abc\n")
+    d = _import(auth_client, text).json()
+    assert d["imported"] == 1 and d["errors"] == 2 and d["total"] == 3
+
+
 # ── Email-alert preferences ──────────────────────────────────────────────────
 
 def test_alerts_settings_roundtrip(auth_client):
