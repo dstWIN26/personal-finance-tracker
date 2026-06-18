@@ -5,8 +5,8 @@ Two jobs:
   2. Drive the bank-linking consent flow (Enable Banking) and store non-secret prefs.
 
 Trade Republic linking is deliberately NOT exposed here: it needs a PIN + OTP and
-writes a private keyfile, so it stays a server-side CLI step (tr_setup.py). This
-page only reports its status and shows the command.
+saves an authenticated web session (cookies), so it stays a server-side CLI step
+(tr_setup.py). This page only reports its status and shows the command.
 """
 import os
 import io
@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from backend import alerts
 from backend.integrations import enable_banking
-from backend.integrations.trade_republic import KEYFILE as TR_KEYFILE
+from backend.integrations.trade_republic import COOKIES_FILE as TR_COOKIES
 from backend.database import (
     connect,
     create_link_state,
@@ -94,12 +94,12 @@ def integrations_status():
                 for a in c.get("accounts", [])
             ],
         })
-    keyfile_present = os.path.exists(TR_KEYFILE)
+    session_present = os.path.exists(TR_COOKIES)
     return {
         "trade_republic": {
             "phone_set": bool(os.getenv("TRADE_REPUBLIC_PHONE")),
-            "keyfile_present": keyfile_present,
-            "linked": keyfile_present,
+            "session_present": session_present,
+            "linked": session_present,
         },
         "enable_banking": {
             "configured": enable_banking.is_configured(),

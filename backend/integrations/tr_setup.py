@@ -1,68 +1,88 @@
 """
-One-time Trade Republic device pairing.
+One-time Trade Republic web-login pairing (pytr 0.4.9).
 
     python -m backend.integrations.tr_setup
 
-This pairs THIS device with your Trade Republic account using your phone + PIN + the
-4-digit OTP sent to your TR app. It writes a private keyfile to keys/tr_keyfile.pem.
+Trade Republic retired the old device-keyfile login (it now rejects it with
+CLIENT_VERSION_OUTDATED). This logs in via TR's *web* flow instead:
+
+  1. Solves TR's AWS WAF anti-bot challenge in pure Python (no browser).
+  2. Sends your phone + PIN, TR pushes a 4-digit code to your TR app.
+  3. You enter the code; the authenticated web session (cookies) is saved to
+     keys/tr_cookies.txt. Ongoing syncs resume that session — your PIN is NOT stored.
 
 After pairing:
-  - All future syncs authenticate with the keyfile — NOT your PIN.
-  - You can (and should) remove TRADE_REPUBLIC_PIN from your .env entirely.
-  - Protect the keyfile: it is gitignored, and you should `chmod 600 keys/tr_keyfile.pem`.
-  - To revoke access, reset paired devices in the Trade Republic app.
+  - Remove TRADE_REPUBLIC_PIN from .env entirely (no longer needed).
+  - Protect the cookies file (it IS the session): gitignored under keys/, chmod 600.
+  - Web sessions expire after a while — if syncs start logging "session expired",
+    just run this command again to re-pair.
+
+If the container can't reach TR, run it on the host network:
+    docker run --rm -it --network host --env-file .env \\
+      -v "$PWD/keys:/app/keys" personal-finance-tracker-app \\
+      python -m backend.integrations.tr_setup
 """
 import os
 import socket
 import getpass
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-KEYFILE = os.getenv("TRADE_REPUBLIC_KEYFILE", "keys/tr_keyfile.pem")
+# pytr's HTTP calls have no timeout, so a stalled route would hang forever with no
+# feedback. A global socket timeout turns that into a fast, clear error instead.
+socket.setdefaulttimeout(60)
 
-# pytr's reset calls hit api.traderepublic.com with `requests` and NO timeout, so a
-# stalled route (e.g. a container with broken outbound egress) makes them hang
-# forever with zero feedback. A global socket timeout turns that silent hang into a
-# fast, clear error instead. Applies to every socket opened by this process.
-socket.setdefaulttimeout(45)
+
+def _explain(exc: Exception) -> str:
+    msg = str(exc)
+    hint = ""
+    if "CLIENT_VERSION_OUTDATED" in msg:
+        hint = "   TR rejected the client version — pytr may need upgrading again.\n"
+    elif "WAF" in msg or "challenge" in msg or "None" in msg:
+        hint = ("   Couldn't solve TR's anti-bot challenge from this network. Retry; if it\n"
+                "   persists from the server, TR may be blocking the datacenter IP.\n")
+    elif isinstance(exc, (TimeoutError, OSError)):
+        hint = ("   Network couldn't reach api.traderepublic.com. Run on the host network:\n"
+                '     docker run --rm -it --network host --env-file .env \\\n'
+                '       -v "$PWD/keys:/app/keys" personal-finance-tracker-app \\\n'
+                "       python -m backend.integrations.tr_setup\n")
+    return f"\n❌ Trade Republic login failed: {type(exc).__name__}: {msg}\n{hint}"
 
 
 def main():
-    from pytr.api import TradeRepublicApi
+    # Import here so the module loads even before deps are installed.
+    from backend.integrations.trade_republic import _build_api, COOKIES_FILE
 
-    phone = os.getenv("TRADE_REPUBLIC_PHONE") or input("Trade Republic phone (+49...): ").strip()
+    if not os.getenv("TRADE_REPUBLIC_PHONE"):
+        os.environ["TRADE_REPUBLIC_PHONE"] = input("Trade Republic phone (+49...): ").strip()
     # PIN is requested interactively and NOT persisted by this script.
-    pin = os.getenv("TRADE_REPUBLIC_PIN") or getpass.getpass("Trade Republic PIN (not stored): ").strip()
+    if not os.getenv("TRADE_REPUBLIC_PIN"):
+        os.environ["TRADE_REPUBLIC_PIN"] = getpass.getpass("Trade Republic PIN (not stored): ").strip()
 
-    Path(os.path.dirname(KEYFILE) or ".").mkdir(parents=True, exist_ok=True)
+    Path(os.path.dirname(COOKIES_FILE) or ".").mkdir(parents=True, exist_ok=True)
 
-    api = TradeRepublicApi(phone_no=phone, pin=pin, keyfile=KEYFILE)
+    api = _build_api()
 
-    print("\nRequesting device pairing — a 4-digit code will be sent to your TR app...")
+    print("\nSolving Trade Republic's anti-bot challenge and requesting a login code...")
     try:
-        api.initiate_device_reset()
-    except (TimeoutError, OSError) as exc:                 # socket.timeout subclasses these
-        raise SystemExit(
-            "\n❌ Could not reach Trade Republic (https://api.traderepublic.com).\n"
-            f"   {type(exc).__name__}: {exc}\n"
-            "   The container has no working outbound network. Pair on the host network:\n\n"
-            '     docker run --rm -it --network host --env-file .env \\\n'
-            '       -v "$PWD/keys:/app/keys" personal-finance-tracker-app \\\n'
-            "       python -m backend.integrations.tr_setup\n"
-        )
+        countdown = api.initiate_weblogin()          # WAF token + web login → code sent
+    except Exception as exc:                         # noqa: BLE001
+        raise SystemExit(_explain(exc))
 
-    token = input("Enter the 4-digit code from your Trade Republic app: ").strip()
-    api.complete_device_reset(token)
+    print(f"A 4-digit code was sent to your Trade Republic app (valid ~{countdown}s).")
+    code = input("Enter the 4-digit code: ").strip()
+    api.complete_weblogin(code)                      # verifies code + saves cookies
 
-    # Lock down the keyfile permissions (owner read/write only).
+    # Lock down the cookies file (owner read/write only) — it is the live session.
     try:
-        os.chmod(KEYFILE, 0o600)
+        os.chmod(COOKIES_FILE, 0o600)
     except OSError:
         pass
 
-    print(f"\n✅ Paired. Keyfile written to {KEYFILE} (chmod 600).")
+    print(f"\n✅ Paired. Web session saved to {COOKIES_FILE} (chmod 600).")
     print("You can now REMOVE TRADE_REPUBLIC_PIN from your .env — it is no longer needed.")
 
 

@@ -60,7 +60,7 @@ Good questions to ask, and where the answer lives:
   Browser ──HTTPS──►  Caddy (auto Let's Encrypt)  ──►  FastAPI app (uvicorn)
   passkey login                                            │
   __Host- session cookie                                   ├── SQLite  (data/finance.db)
-                                                           ├── keys/tr_keyfile.pem
+                                                           ├── keys/tr_cookies.txt
                                                            └── APScheduler (in-process)
                                                                  ├ TR portfolio / txns
                                                                  ├ Revolut sync
@@ -111,7 +111,7 @@ docs (*.md)          ← see Documentation map below
 ```
 
 **Runtime state that must be backed up and is gitignored:** `data/` (SQLite DB + enrolled
-passkeys + sessions) and `keys/tr_keyfile.pem` (the TR device credential). `.env` holds
+passkeys + sessions) and `keys/tr_cookies.txt` (the TR web-session credential). `.env` holds
 secrets. None of these are in git.
 
 ---
@@ -199,7 +199,7 @@ There is **no username/password env var** — login is a passkey set up via
 | `MAX_PW_FAILURES` / `LOCKOUT_MINUTES` | Bootstrap-password brute-force lockout (defaults `5` / `15`). |
 | `TRADE_REPUBLIC_PHONE` | Your TR phone number (`+49…`). Required for portfolio sync. |
 | `TRADE_REPUBLIC_PIN` | **Only** for one-time pairing — delete after `tr_setup`. Never stored long-term. |
-| `TRADE_REPUBLIC_KEYFILE` | Device keyfile path (default `keys/tr_keyfile.pem`). |
+| `TRADE_REPUBLIC_COOKIES_FILE` | Saved web-session path (default `keys/tr_cookies.txt`). |
 | `SALTEDGE_APP_ID` / `SALTEDGE_SECRET` | Salt Edge credentials for Revolut. |
 | `SALTEDGE_CUSTOMER_ID` / `SALTEDGE_CONNECTION_ID` | Filled in by `revolut_setup`. |
 | `EMAIL_FROM` / `EMAIL_TO` / `EMAIL_SMTP_PASSWORD` | Gmail alerts (App Password). Optional. |

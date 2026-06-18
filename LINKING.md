@@ -52,8 +52,9 @@ python -m backend.integrations.tr_setup
 docker compose run --rm app python -m backend.integrations.tr_setup
 ```
 
-On success it writes `keys/tr_keyfile.pem` (the credential) and prints
-`✅ Paired.` Nothing you typed at the prompt is saved.
+On success it logs in via Trade Republic's web flow (solving their anti-bot
+challenge in pure Python — no browser needed) and writes `keys/tr_cookies.txt`
+(the saved web session) then prints `✅ Paired.` Nothing you typed at the prompt is saved.
 
 ### Step 3 — restart so the scheduler picks it up
 
@@ -69,9 +70,10 @@ syncs every 15 min, transactions hourly; restart once more to pull immediately).
 The **Settings** page will then show Trade Republic as **Linked**.
 
 **Security notes**
-- The keyfile is the credential — keep `keys/` private (`chmod 600 keys/tr_keyfile.pem`); it's gitignored.
-- To revoke: reset paired devices in the Trade Republic app, and delete the keyfile.
-- `pytr` is unofficial; syncs are throttled to ≤ 1 req/sec.
+- The cookies file is the credential — keep `keys/` private (`chmod 600 keys/tr_cookies.txt`); it's gitignored.
+- To revoke: reset paired devices in the Trade Republic app, and delete the cookies file.
+- Web sessions expire periodically — if syncs log `session expired`, just re-run the pairing command.
+- `pytr` 0.4.9 is unofficial; it logs in via TR's web API.
 
 ---
 

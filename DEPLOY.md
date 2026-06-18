@@ -58,7 +58,7 @@ docker compose logs -f caddy   # watch the cert get issued
 ## 5. Link Trade Republic (and Revolut) — do this after you're logged in
 See **[LINKING.md](LINKING.md)** for the step-by-step pairing flow. In short:
 ```bash
-# Pair the Trade Republic device once (writes keys/tr_keyfile.pem):
+# Log in to Trade Republic once (writes the web session to keys/tr_cookies.txt):
 docker compose run --rm app python -m backend.integrations.tr_setup
 # then set TRADE_REPUBLIC_PHONE in .env, remove the PIN line, and restart:
 docker compose up -d

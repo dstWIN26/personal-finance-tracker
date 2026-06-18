@@ -22,8 +22,9 @@ RECOMMENDED = [
 # revolut_setup.py, so they are intentionally not in REQUIRED.
 
 # Trade Republic: only the phone number is required at runtime.
-# The PIN is NOT stored — after one-time device pairing, auth uses keys/tr_keyfile.pem.
-# TRADE_REPUBLIC_PIN is optional and only consumed during initial pairing (tr_setup.py).
+# The PIN is NOT stored — after one-time web-login pairing, syncs resume the saved
+# web session at keys/tr_cookies.txt. TRADE_REPUBLIC_PIN is optional and only
+# consumed during initial pairing (tr_setup.py).
 TR_REQUIRED = ["TRADE_REPUBLIC_PHONE"]
 
 def validate():

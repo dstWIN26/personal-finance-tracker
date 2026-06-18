@@ -600,16 +600,16 @@
                 <div class="provider-head">
                     <div>
                         <div class="provider-title">Trade Republic</div>
-                        <div class="provider-sub">Portfolio &amp; transactions via the community <code>pytr</code> device pairing — keyfile auth, your PIN is never stored.</div>
+                        <div class="provider-sub">Portfolio &amp; transactions via the community <code>pytr</code> web-login — the session is stored server-side, your PIN is never stored.</div>
                     </div>
                     <span class="badge" :class="integrations.trade_republic.linked ? 'badge-ok' : 'badge-off'"
                           x-text="integrations.trade_republic.linked ? 'Linked' : 'Not linked'"></span>
                 </div>
                 <template x-if="!integrations.trade_republic.linked">
                     <div class="notice" style="margin-top:12px">
-                        Trade Republic needs a one-time pairing <strong>on the server</strong> (it asks for your PIN and a 4-digit code — these stay on the server, never in the browser):
+                        Trade Republic needs a one-time web login <strong>on the server</strong> (it asks for your PIN and a 4-digit code — these stay on the server, never in the browser):
                         <code class="codeblock">docker compose run --rm app python -m backend.integrations.tr_setup</code>
-                        Then set <code>TRADE_REPUBLIC_PHONE</code> in <code>.env</code>, delete any <code>TRADE_REPUBLIC_PIN</code> line, and restart with <code>docker compose up -d</code>. Your portfolio appears within ~15 minutes.
+                        Then set <code>TRADE_REPUBLIC_PHONE</code> in <code>.env</code>, delete any <code>TRADE_REPUBLIC_PIN</code> line, and restart with <code>docker compose up -d</code>. Your portfolio appears within ~15 minutes. (Web sessions expire periodically — just re-run the command to re-pair.)
                     </div>
                 </template>
                 <template x-if="integrations.trade_republic.linked">
