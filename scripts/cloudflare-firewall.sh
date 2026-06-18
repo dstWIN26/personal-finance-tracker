@@ -16,6 +16,15 @@ set -euo pipefail
 
 PORTS="80,443"
 
+# Only filter traffic arriving FROM the internet on the WAN NIC. DOCKER-USER is
+# traversed for ALL forwarded packets — including containers' OWN outbound
+# connections to remote :443 (Trade Republic, FMP, ECB, Let's Encrypt …) — so an
+# un-scoped "drop dports 80,443" silently kills every container's HTTPS egress.
+# Matching -i $WAN restricts the lock to direct-to-origin-IP hits (which enter on
+# $WAN), leaving container egress untouched.
+WAN="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+[ -n "$WAN" ] || { echo "Could not detect WAN interface (ip route show default)." >&2; exit 1; }
+
 lock() {
     local ipt="$1" chain="$2" url="$3"
     # Fresh, dedicated chain each run (idempotent); hook it into DOCKER-USER once.
@@ -25,13 +34,14 @@ lock() {
     local n=0
     while read -r cidr; do
         [ -n "$cidr" ] || continue
-        "$ipt" -A "$chain" -p tcp -m multiport --dports "$PORTS" -s "$cidr" -j RETURN
+        "$ipt" -A "$chain" -i "$WAN" -p tcp -m multiport --dports "$PORTS" -s "$cidr" -j RETURN
         n=$((n + 1))
     done < <(curl -fsSL "$url")
 
-    # Anything else aimed at 80/443 is dropped; other ports fall through untouched.
-    "$ipt" -A "$chain" -p tcp -m multiport --dports "$PORTS" -j DROP
-    echo "  $ipt: allowed $n Cloudflare ranges on $PORTS"
+    # Anything else arriving on $WAN for 80/443 is dropped; container egress and
+    # all other ports fall through untouched.
+    "$ipt" -A "$chain" -i "$WAN" -p tcp -m multiport --dports "$PORTS" -j DROP
+    echo "  $ipt: allowed $n Cloudflare ranges on $PORTS (inbound via $WAN)"
 }
 
 lock iptables  FTS_CF  https://www.cloudflare.com/ips-v4
