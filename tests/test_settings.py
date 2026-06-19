@@ -181,6 +181,18 @@ def test_export_transactions_csv(auth_client):
     assert any("Coffee" in ln for ln in lines[1:])
 
 
+def test_export_neutralises_spreadsheet_formula_injection(auth_client):
+    # A description crafted to be a spreadsheet formula must be defused on export,
+    # while a genuinely negative amount must stay numeric (not quoted/mangled).
+    db.insert_transaction(source="manual", date="2026-06-01",
+                          description="=2+5", category="food", amount=-9.0)
+    r = auth_client.get("/settings/export/transactions.csv")
+    assert r.status_code == 200
+    target = [ln for ln in r.text.strip().splitlines() if "2+5" in ln][0]
+    assert "'=2+5" in target          # formula lead defused with a leading apostrophe
+    assert "-9.0" in target           # numeric amount untouched (still negative)
+
+
 def test_export_all_json_has_no_secrets(auth_client):
     r = auth_client.get("/settings/export/all.json")
     assert r.status_code == 200

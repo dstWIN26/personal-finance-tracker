@@ -148,12 +148,27 @@ async def sync_now():
 
 # ── Data export (financial data only — never auth/secrets) ───────────────────
 
+# A cell that begins with any of these can be executed as a formula when the CSV
+# is opened in Excel / LibreOffice / Google Sheets (CSV "formula injection"), e.g.
+# a transaction description of `=HYPERLINK(...)` or `@SUM(...)`. We neutralise such
+# cells by prefixing a single quote so the spreadsheet treats them as plain text.
+_CSV_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Defuse spreadsheet-formula cells. Only strings are guarded — numbers and
+    None pass through unchanged, so negative amounts stay numeric (not quoted)."""
+    if isinstance(value, str) and value and value[0] in _CSV_FORMULA_LEAD:
+        return "'" + value
+    return value
+
+
 def _csv(columns: list[str], rows, filename: str) -> Response:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
     for r in rows:
-        writer.writerow([r[c] for c in columns])
+        writer.writerow([_csv_safe(r[c]) for c in columns])
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
