@@ -22,9 +22,15 @@ def _build_api():
         session cookies to COOKIES_FILE. Ongoing syncs *resume* that session.
       - The PIN is only read during initial pairing and is NOT needed at runtime.
         Keep TRADE_REPUBLIC_PIN out of .env once paired.
-      - `waf_token="awswaf"` solves TR's anti-bot challenge in pure Python (curl_cffi),
-        so we don't have to bundle a headless browser. Credentials are never logged,
-        never returned by any route, never stored in the DB.
+      - `waf_token="playwright"` mints TR's anti-bot (AWS WAF) token with a REAL
+        headless browser. TR hard-blocks the pure-Python solver (`awswaf`) at its
+        edge (405), so Playwright is the only method that gets a login through.
+        IMPORTANT: the browser is needed ONLY for the one-time pairing — resuming
+        the session and the websocket data feed use the saved cookies alone (no
+        browser), so the server container needs no Chromium. Pair on a machine
+        that has a browser (your Mac, or `playwright install chromium`), then copy
+        the cookies file to the server. Credentials are never logged, never
+        returned by any route, never stored in the DB.
     """
     from pytr.api import TradeRepublicApi
     return TradeRepublicApi(
@@ -33,7 +39,7 @@ def _build_api():
         locale="en",
         save_cookies=True,
         cookies_file=COOKIES_FILE,
-        waf_token="awswaf",
+        waf_token="playwright",
     )
 
 

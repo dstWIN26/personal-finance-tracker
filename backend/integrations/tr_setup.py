@@ -3,24 +3,26 @@ One-time Trade Republic web-login pairing (pytr 0.4.9).
 
     python -m backend.integrations.tr_setup
 
-Trade Republic retired the old device-keyfile login (it now rejects it with
-CLIENT_VERSION_OUTDATED). This logs in via TR's *web* flow instead:
+RUN THIS ON A MACHINE WITH A BROWSER (e.g. your Mac), NOT the headless server.
+Trade Republic hard-blocks the pure-Python anti-bot solver at its edge (405), so
+pytr mints the AWS WAF token with a REAL headless browser (Playwright). On first
+run pytr auto-downloads Chromium (~160 MB) — that's normal. The flow:
 
-  1. Solves TR's AWS WAF anti-bot challenge in pure Python (no browser).
-  2. Sends your phone + PIN, TR pushes a 4-digit code to your TR app.
+  1. Playwright loads TR's login page and obtains a WAF token TR accepts.
+  2. Sends your phone + PIN; TR pushes a 4-digit code to your TR app.
   3. You enter the code; the authenticated web session (cookies) is saved to
-     keys/tr_cookies.txt. Ongoing syncs resume that session — your PIN is NOT stored.
+     keys/tr_cookies.txt. Your PIN is NOT stored.
+
+Then put the session on the server (the server needs NO browser — resuming the
+session + the websocket data feed use the saved cookies alone):
+
+    scp keys/tr_cookies.txt  you@your-server:~/personal-finance-tracker/keys/
 
 After pairing:
   - Remove TRADE_REPUBLIC_PIN from .env entirely (no longer needed).
   - Protect the cookies file (it IS the session): gitignored under keys/, chmod 600.
   - Web sessions expire after a while — if syncs start logging "session expired",
-    just run this command again to re-pair.
-
-If the container can't reach TR, run it on the host network:
-    docker run --rm -it --network host --env-file .env \\
-      -v "$PWD/keys:/app/keys" personal-finance-tracker-app \\
-      python -m backend.integrations.tr_setup
+    re-run this on your Mac and copy keys/tr_cookies.txt over again.
 """
 import os
 import socket
@@ -38,17 +40,19 @@ socket.setdefaulttimeout(60)
 
 def _explain(exc: Exception) -> str:
     msg = str(exc)
+    low = msg.lower()
     hint = ""
     if "CLIENT_VERSION_OUTDATED" in msg:
         hint = "   TR rejected the client version — pytr may need upgrading again.\n"
-    elif "WAF" in msg or "challenge" in msg or "None" in msg:
-        hint = ("   Couldn't solve TR's anti-bot challenge from this network. Retry; if it\n"
-                "   persists from the server, TR may be blocking the datacenter IP.\n")
+    elif "executable doesn't exist" in low or "playwright install" in low or "browsertype.launch" in low:
+        hint = ("   Playwright's browser isn't installed. Install it once, then retry:\n"
+                "     playwright install chromium\n")
+    elif "405" in msg or "403" in msg or "waf" in low or "challenge" in low or "forbidden" in low:
+        hint = ("   TR's edge blocked the login. This flow needs a REAL browser (Playwright)\n"
+                "   on a normal residential network — run it on your Mac, NOT the headless\n"
+                "   datacenter server. The server only needs the resulting cookies file.\n")
     elif isinstance(exc, (TimeoutError, OSError)):
-        hint = ("   Network couldn't reach api.traderepublic.com. Run on the host network:\n"
-                '     docker run --rm -it --network host --env-file .env \\\n'
-                '       -v "$PWD/keys:/app/keys" personal-finance-tracker-app \\\n'
-                "       python -m backend.integrations.tr_setup\n")
+        hint = "   Network couldn't reach api.traderepublic.com — check your connection and retry.\n"
     return f"\n❌ Trade Republic login failed: {type(exc).__name__}: {msg}\n{hint}"
 
 

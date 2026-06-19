@@ -4,8 +4,11 @@ apscheduler==3.10.4
 httpx==0.28.1
 # pytr 0.4.9: Trade Republic now requires its modern web-login flow + an AWS WAF
 # anti-bot token (0.4.1's device-keyfile login is rejected with CLIENT_VERSION_OUTDATED).
-# Pulls in playwright + curl_cffi (transitively). We use the keyless `awswaf` token
-# mode, so NO browser binary is needed — `pip install` alone suffices (no chromium).
+# Pulls in playwright + curl_cffi. TR hard-blocks the pure-Python `awswaf` solver at
+# its edge (405), so pairing uses the `playwright` token (a real headless Chromium):
+# run `playwright install chromium` ONCE on the machine you pair from (your Mac).
+# The SERVER needs no browser — resuming the session + the data feed use the saved
+# cookies alone — so do NOT install chromium there.
 pytr==0.4.9
 python-dotenv==1.2.2
 python-multipart==0.0.31
