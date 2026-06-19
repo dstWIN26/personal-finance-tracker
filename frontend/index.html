@@ -13,15 +13,27 @@
 
 <!-- ── Top Bar ── -->
 <header class="topbar">
-    <div class="topbar-brand" x-text="profile.display_name || 'Finance'"></div>
-    <nav class="topbar-nav">
-        <a href="#" @click.prevent="tab='overview'"  :class="tab==='overview'  ? 'active' : ''">Overview</a>
-        <a href="#" @click.prevent="tab='spending'"  :class="tab==='spending'  ? 'active' : ''">Spending</a>
-        <a href="#" @click.prevent="tab='portfolio'" :class="tab==='portfolio' ? 'active' : ''">Portfolio</a>
-        <a href="#" @click.prevent="tab='markets'"   :class="tab==='markets'   ? 'active' : ''">Markets</a>
-        <a href="#" @click.prevent="tab='trading'"   :class="tab==='trading'   ? 'active' : ''">Trading</a>
-        <a href="#" @click.prevent="tab='limits'"    :class="tab==='limits'    ? 'active' : ''">Limits</a>
+    <!-- Playful rocket fly-by — clipped to the header band, never over the data/charts -->
+    <div class="topbar-flyby" aria-hidden="true">
+        <svg class="flyby-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+    </div>
+    <div class="topbar-inner">
+    <div class="topbar-brand" title="Personal Finance Tracker">
+        <svg class="brand-logo" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="35" height="35" rx="11" fill="rgba(255,255,255,0.04)" stroke="currentColor" stroke-width="2.4"/><path d="M10 27l6.5-7 4.5 4 8.5-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M24.5 14h5.5v5.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span x-text="profile.display_name || 'PFT'"></span>
+    </div>
+    <nav class="topbar-nav" aria-label="Primary">
+        <a href="#" @click.prevent="tab='overview'" :class="tab==='overview' ? 'active' : ''" :aria-current="tab==='overview' ? 'page' : null">
+            <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+            <span>Overview</span></a>
+        <a href="#" @click.prevent="tab='markets'" :class="tab==='markets' ? 'active' : ''" :aria-current="tab==='markets' ? 'page' : null">
+            <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
+            <span>Markets</span></a>
+        <a href="#" @click.prevent="tab='trading'" :class="tab==='trading' ? 'active' : ''" :aria-current="tab==='trading' ? 'page' : null">
+            <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+            <span>Trading</span></a>
     </nav>
+    <div class="topbar-actions">
     <!-- Global live/pause + feed freshness (governs Markets & Trading polling) -->
     <button class="live-toggle" @click="toggleLive()"
             :class="live ? (feedError ? 'err' : 'on') : 'paused'"
@@ -32,11 +44,56 @@
     </button>
     <button class="icon-btn" @click="togglePrivacy()" :class="hideBalances ? 'active' : ''"
             :title="hideBalances ? 'Show amounts' : 'Hide amounts (privacy)'" x-text="hideBalances ? 'Show €' : 'Hide €'"></button>
-    <button class="icon-btn" @click="openSettings()" :class="tab==='settings' ? 'active' : ''" title="Settings & linked accounts">Settings</button>
-    <button class="icon-btn" @click="openProfile()" :class="tab==='profile' ? 'active' : ''" title="Profile & preferences">Profile</button>
-    <button class="icon-btn" @click="openSessions()" title="Active sessions">Sessions</button>
-    <button class="icon-btn" @click="addPasskey()" title="Enrol another passkey">+ Passkey</button>
-    <button class="icon-btn" @click="logout()" title="Sign out">Sign out</button>
+    <!-- Profile menu: everything that isn't a core workspace lives here -->
+    <div class="profile-menu" x-data="{ open: false }"
+         @click.away="open = false" @keydown.escape.window="open = false">
+        <button type="button" class="profile-trigger" @click="open = !open"
+                :class="{ open: open, active: ['spending','portfolio','limits','settings','profile','security'].includes(tab) }"
+                aria-haspopup="true" :aria-expanded="open ? 'true' : 'false'"
+                aria-label="Profile, pages and account menu">
+            <span class="profile-avatar" aria-hidden="true" x-text="(profile.display_name || 'P').trim().charAt(0).toUpperCase()"></span>
+            <span class="profile-label">Profile</span>
+            <svg class="profile-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+
+        <div class="profile-dropdown" x-show="open" x-cloak role="menu" aria-label="Profile menu"
+             x-transition:enter="pm-anim" x-transition:enter-start="pm-closed" x-transition:enter-end="pm-open"
+             x-transition:leave="pm-anim" x-transition:leave-start="pm-open" x-transition:leave-end="pm-closed">
+
+            <p class="menu-label">Pages</p>
+            <button type="button" class="menu-item" role="menuitem" @click="tab='spending'; open=false" :class="{ active: tab==='spending' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+                <span>Spending</span></button>
+            <button type="button" class="menu-item" role="menuitem" @click="tab='portfolio'; open=false" :class="{ active: tab==='portfolio' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                <span>Portfolio</span></button>
+            <button type="button" class="menu-item" role="menuitem" @click="tab='limits'; open=false" :class="{ active: tab==='limits' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 13l3.5-2.5"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+                <span>Limits</span></button>
+
+            <div class="menu-divider" role="separator"></div>
+            <p class="menu-label">Account</p>
+            <button type="button" class="menu-item" role="menuitem" @click="openSettings(); open=false" :class="{ active: tab==='settings' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>Settings</span></button>
+            <button type="button" class="menu-item" role="menuitem" @click="openProfile(); open=false" :class="{ active: tab==='profile' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span>Preferences</span></button>
+            <button type="button" class="menu-item" role="menuitem" @click="openSessions(); open=false" :class="{ active: tab==='security' }">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                <span>Active sessions</span></button>
+            <button type="button" class="menu-item" role="menuitem" @click="addPasskey(); open=false">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.4 11.6 21 2"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+                <span>Add passkey</span></button>
+
+            <div class="menu-divider" role="separator"></div>
+            <button type="button" class="menu-item danger" role="menuitem" @click="logout()">
+                <svg class="menu-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                <span>Sign out</span></button>
+        </div>
+    </div>
+    </div><!-- /topbar-actions -->
+    </div><!-- /topbar-inner -->
 </header>
 
 <main class="container">
