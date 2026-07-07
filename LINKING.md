@@ -4,12 +4,11 @@ Do this **after** the app is deployed and you've logged in with your passkey
 ([DEPLOY.md](DEPLOY.md)). The dashboard runs without these; they just populate the
 Overview / Spending / Portfolio tabs with your real data.
 
-Most of this is now driven from the in-app **Settings** page (top-right): it shows
-each provider's link status and, for banks, gives you **Connect** buttons that run
-the consent flow. Trade Republic still needs a one-time pairing command on the
-**server** (it asks for a PIN + OTP and writes a keyfile), and the one-time bank
-aggregator setup (below) is also a server step — both need the `keys/` and `.env`
-on the host.
+Most of this is driven from the in-app **Settings** page (top-right): it shows each
+provider's link status and, for banks, gives you **Connect** buttons that run the
+consent flow. Trade Republic needs no pairing at all — you just upload a CSV export
+(below). The one-time bank aggregator setup is a server step (it needs the `keys/`
+RSA key and `.env` on the host).
 
 ---
 
@@ -42,6 +41,14 @@ headers, `;` or `,` delimiters, and European number/date formats like `1.234,56`
 and `01.05.2026`), and the database **dedupes** automatically — so you can
 re-import the same file, or overlapping date ranges, and only genuinely new rows
 are added. Outflows become spending (negative), inflows become income (positive).
+
+> **Want automated TR sync later?** Don't reach for a private-API hack — it breaks
+> and risks a ban. The clean path is a **licensed account-aggregation provider**,
+> the same model this app already uses for banks (Enable Banking) and that
+> **Finanzfluss Copilot** uses for brokers: **wealthAPI** (BaFin-regulated,
+> Trade Republic supported). It would plug in exactly like the Enable Banking
+> integration — an OAuth-style consent + a signed API — so it's a drop-in future
+> `integrations/wealthapi.py` rather than any change to this CSV path.
 
 > Tip: re-export and re-import whenever you want fresh data — it's safe to repeat.
 > If the import reports rows it "couldn't read", send the file's header row and I

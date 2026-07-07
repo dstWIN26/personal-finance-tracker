@@ -56,11 +56,12 @@ def test_settings_requires_auth(client):
 
 
 def test_integrations_status_exposes_no_secrets(auth_client, monkeypatch):
-    monkeypatch.setenv("TRADE_REPUBLIC_PHONE", "+490000")
     r = auth_client.get("/settings/integrations")
     assert r.status_code == 200
     d = r.json()
-    assert d["trade_republic"]["phone_set"] is True
+    # Trade Republic is CSV-import-only: no credentials, reports import state only.
+    assert d["trade_republic"]["import_only"] is True
+    assert d["trade_republic"]["linked"] is False       # nothing imported yet
     assert isinstance(d["enable_banking"]["configured"], bool)
     assert d["banks"] == []
     # No credential-ish material must ever appear in this payload.
@@ -143,7 +144,6 @@ def test_integrations_reports_last_synced(auth_client):
 
 
 def test_sync_now_runs_each_source_and_isolates_failures(auth_client, monkeypatch):
-    import backend.integrations.trade_republic as tr
     import backend.integrations.revolut as rev
     import backend.integrations.enable_banking as eb2
 
@@ -153,17 +153,16 @@ def test_sync_now_runs_each_source_and_isolates_failures(auth_client, monkeypatc
     async def boom():
         raise RuntimeError("provider down")
 
-    monkeypatch.setattr(tr, "sync_portfolio", ok)
-    monkeypatch.setattr(tr, "sync_tr_transactions", ok)
     monkeypatch.setattr(rev, "sync_transactions", boom)
     monkeypatch.setattr(eb2, "sync_bank_connections", ok)
 
     r = auth_client.post("/settings/sync")
     assert r.status_code == 200
     res = r.json()["results"]
-    assert res["trade_republic_portfolio"] == "ok"
     assert res["banks"] == "ok"
     assert res["revolut"] == "error"               # one bad source doesn't fail the rest
+    # Trade Republic is CSV-import-only, so it is NOT a sync source.
+    assert "trade_republic_portfolio" not in res
     assert "last_synced" in r.json()
 
 

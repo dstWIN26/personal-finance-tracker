@@ -60,9 +60,7 @@ Good questions to ask, and where the answer lives:
   Browser ──HTTPS──►  Caddy (auto Let's Encrypt)  ──►  FastAPI app (uvicorn)
   passkey login                                            │
   __Host- session cookie                                   ├── SQLite  (data/finance.db)
-                                                           ├── keys/tr_cookies.txt
                                                            └── APScheduler (in-process)
-                                                                 ├ TR portfolio / txns
                                                                  ├ Revolut sync
                                                                  ├ market quotes  ~60s
                                                                  ├ bond yields    ~30m
@@ -96,7 +94,7 @@ backend/
   routes/            ← HTTP endpoints, one file per area                    (changes often)
     auth.py  overview.py  spending.py  portfolio.py  market.py  limits.py
   integrations/      ← external data clients                                (changes when a provider changes)
-    trade_republic.py  revolut.py  market.py  *_setup.py
+    revolut.py  enable_banking.py  market.py  *_setup.py   (no trade_republic — TR is CSV import)
 
 frontend/            ← single-page dashboard, no build step                 (changes often: UI work)
   index.html  login.html  css/style.css  js/app.js  js/login.js  js/webauthn.js
@@ -111,7 +109,7 @@ docs (*.md)          ← see Documentation map below
 ```
 
 **Runtime state that must be backed up and is gitignored:** `data/` (SQLite DB + enrolled
-passkeys + sessions) and `keys/tr_cookies.txt` (the TR web-session credential). `.env` holds
+passkeys + sessions) and `keys/` (the Enable Banking RSA private key). `.env` holds
 secrets. None of these are in git.
 
 ---
@@ -123,7 +121,7 @@ secrets. None of these are in git.
 | Indices, VIX, quotes, candlesticks, heatmap | Yahoo Finance chart API | No (keyless) |
 | US Treasury yields | US Treasury par-yield XML feed | No |
 | European yields | ECB Statistical Data Warehouse | No |
-| Portfolio (positions, P&L) | Trade Republic via `pytr` (unofficial WebSocket) | Device keyfile |
+| Portfolio / TR transactions | Trade Republic **CSV export** (uploaded in Settings) | No API — manual import |
 | Spending (transactions) | Revolut via **Salt Edge** AIS API v6 | App-id + Secret |
 | Email alerts | Gmail SMTP (App Password) | App Password |
 
@@ -158,7 +156,7 @@ the only way in is your device biometric.
 ## Deployment
 
 **Production target: a small VPS + Docker + Caddy, fronted by Cloudflare.** This app is
-a *stateful, always-on server* — it keeps SQLite + a broker keyfile on disk and runs
+a *stateful, always-on server* — it keeps SQLite on disk and runs
 background scheduler jobs — so it needs a persistent filesystem and a long-lived
 process. Full walkthrough in **[`DEPLOY.md`](DEPLOY.md)** (provisioning, passkey
 enrolment, backups, and the "Behind Cloudflare" hardening steps).
@@ -177,7 +175,7 @@ sudo ./scripts/cloudflare-firewall.sh                 # lock origin to Cloudflar
 You can't host this app *on* Cloudflare Pages or Workers as-is. Pages serves static
 sites; Workers run short-lived JS/WASM isolates with **no persistent filesystem, no
 always-on process, and no native-Python runtime** — but this app needs all three
-(on-disk SQLite + TR keyfile, the APScheduler background jobs, and native deps like
+(on-disk SQLite, the APScheduler background jobs, and native deps like
 `argon2-cffi`/`httpx`). Cloudflare's role here is the **edge in front of the VPS**:
 your purchased domain + Cloudflare nameservers/DNS are exactly what you point
 (Proxied) at the origin server. See the chat/answer and `DEPLOY.md` for detail.
@@ -197,9 +195,7 @@ There is **no username/password env var** — login is a passkey set up via
 | `SESSION_TTL_HOURS` | Session lifetime (default `12`). |
 | `ACME_EMAIL` | Email for Let's Encrypt (Caddy) renewal notices. |
 | `MAX_PW_FAILURES` / `LOCKOUT_MINUTES` | Bootstrap-password brute-force lockout (defaults `5` / `15`). |
-| `TRADE_REPUBLIC_PHONE` | Your TR phone number (`+49…`). Required for portfolio sync. |
-| `TRADE_REPUBLIC_PIN` | **Only** for one-time pairing — delete after `tr_setup`. Never stored long-term. |
-| `TRADE_REPUBLIC_COOKIES_FILE` | Saved web-session path (default `keys/tr_cookies.txt`). |
+| _(Trade Republic)_ | No env vars — TR is CSV-import-only (Settings → Trade Republic). |
 | `SALTEDGE_APP_ID` / `SALTEDGE_SECRET` | Salt Edge credentials for Revolut. |
 | `SALTEDGE_CUSTOMER_ID` / `SALTEDGE_CONNECTION_ID` | Filled in by `revolut_setup`. |
 | `EMAIL_FROM` / `EMAIL_TO` / `EMAIL_SMTP_PASSWORD` | Gmail alerts (App Password). Optional. |
@@ -219,13 +215,15 @@ idle integrations rather than failing.
   SHA-256. The **session ID is rotated on every login** and destroyed on logout.
   View and revoke active sessions from the Security tab.
 - **Cookies**: HttpOnly, SameSite=Strict, Secure + `__Host-` prefix on HTTPS.
-- **IP lockout** after repeated bootstrap-password failures; real client IP read from
-  `CF-Connecting-IP` when behind Cloudflare.
+- **IP lockout** after repeated bootstrap-password failures. The client IP is taken
+  from the real TCP peer by default; set `TRUST_CF_HEADERS=true` (only once the origin
+  is firewalled to Cloudflare) to key it on `CF-Connecting-IP` instead — a spoofed
+  header can't bypass the lockout when trust is off.
 - **Headers** on every response: CSP, HSTS, nosniff, frame-ancestors none.
 - **Origin-checked** state-changing requests (CSRF defence on top of SameSite).
 - **Secrets stay out of git**: `.env`, `*.pem`, `keys/`, `*.db`, and `backups/` are
   gitignored. This repo is public — never commit real secrets.
-- **Credential handling**: TR PIN is never persisted (keyfile auth only); Revolut bank
+- **Credential handling**: Trade Republic uses no credentials at all (CSV import only); Revolut bank
   login is never seen by this app (Salt Edge holds it; you store an opaque ID).
 - **Login alerts**: if email is configured, you're notified on every sign-in, new
   passkey enrolment, and lockout — with time, IP, and device.

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 > **Working a planned task?** [`CLAUDE_CODE_PLAN.md`](CLAUDE_CODE_PLAN.md) is the
 > source of truth for the current workstreams (security review, codebase review +
@@ -68,7 +68,10 @@ raise) so the app can deploy first and link accounts later.
 RP_ID, RP_ORIGIN, RP_NAME            # your domain (localhost for dev); passkeys bind to RP_ID
 SESSION_TTL_HOURS, ACME_EMAIL        # session lifetime; Let's Encrypt email (Caddy)
 MAX_PW_FAILURES, LOCKOUT_MINUTES     # bootstrap-password lockout (defaults 5 / 15)
-# Trade Republic — CSV import only (no API, no credentials): Settings → import CSV
+# Trade Republic (keyfile auth; PIN never stored)
+TRADE_REPUBLIC_PHONE                 # required for portfolio sync
+TRADE_REPUBLIC_PIN                   # ONLY for one-time pairing — delete after tr_setup
+TRADE_REPUBLIC_KEYFILE=keys/tr_keyfile.pem
 # Market data (Markets/Trading tabs) — Financial Modeling Prep, free tier
 FMP_API_KEY                          # free key; blank → equity panels idle (ECB yields still show)
 # Bank accounts via Enable Banking (free PSD2 aggregator; RSA-key/JWT auth)
@@ -100,7 +103,7 @@ Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
 - **`auth_setup.py`** — CLI to set the one-time bootstrap password.
 - **`database.py`** — `init_db()` creates all tables (incl. auth tables); `connect()` is a context manager yielding a `sqlite3.Row` connection with auto-commit; `_ensure_dirs()` creates `data/`+`keys/`.
 - **`config.py`** — loads `.env`; `validate()` **warns** (does not raise) on missing optional integrations; derives WebAuthn/cookie settings.
-- **Trade Republic — CSV import only.** There is no TR integration module: TR has no usable automated API (they block unofficial logins and it risks an account ban), so the user exports transactions from the TR app/web and uploads the CSV via **Settings → Trade Republic** (`POST /settings/import/transactions` in `routes/settings.py`). Imported rows are stored with `source="trade_republic"`, so overview/spending/portfolio treat them like any other source. A licensed aggregator (e.g. wealthAPI, the model Finanzfluss uses) is the documented future path for automated TR data — see `LINKING.md`.
+- **`integrations/trade_republic.py`** — `pytr` (unofficial WebSocket); auth via device **keyfile**, NOT the PIN; paired once via `tr_setup.py`; errors logged without credentials. Degrades gracefully when the keyfile is absent.
 - **`integrations/revolut.py`** — async `httpx` to the **Salt Edge** Account Information API v6 (legacy); paginates transactions, records balances, `categorize()` keyword-maps descriptions. Consent via `revolut_setup.py`.
 - **`integrations/enable_banking.py`** — free PSD2 aggregator (Revolut, Deutsche Bank, ~2,700 EEA banks). Auth = RS256 JWT signed locally with the RSA keyfile (no shared secret; signed via `cryptography`, already a dep). Redirect/consent linking driven from the Settings page; `sync_bank_connections()` pulls balances+transactions into the unified tables. Bank credentials never touch the app; only an opaque session id + account refs are stored (`bank_connections`). Degrades gracefully when unconfigured.
 - **`integrations/market.py`** — live data via **FMP** (`FMP_API_KEY`, free tier) + **ECB** (keyless). Yahoo/Stooq block datacenter IPs, so FMP is used server-side; its free tier is US-listed only, so indices are shown via US-listed ETF proxies (SPY/QQQ/DIA, and FEZ/EWG/EWU for Euro Stoxx/DAX/FTSE). US bonds from FMP `/v4/treasury`, euro-area from ECB. In-process TTL cache; scheduler warm-job keeps it fresh; degrades gracefully (empty panels, no key → equities idle, ECB still shows). Data is EOD/delayed on the free tier.
@@ -110,6 +113,8 @@ Browser → Cloudflare (edge) → Caddy (TLS) → uvicorn → FastAPI → SQLite
 ### Scheduler jobs (APScheduler, in-process)
 | Job | Interval |
 |---|---|
+| TR portfolio sync | 15 min |
+| TR transaction sync | 1 hr |
 | Revolut (Salt Edge, legacy) sync | 1 hr |
 | Enable Banking bank sync | 1 hr |
 | Budget-limit check + alerts | 1 hr |
@@ -141,6 +146,6 @@ prefs). Auth tables: `auth_state` (singleton), `webauthn_credentials`, `sessions
 - **APScheduler inside FastAPI** — single process = single container; jobs resume on restart.
 - **Passkey-only WebAuthn** (not Basic Auth) — phishing-resistant, no shared secret; session id rotated on every login.
 - **No npm** — Chart.js / Alpine.js / webauthn helpers load from CDN.
-- **Trade Republic via CSV import** — TR has no usable automated API. Every unofficial method (device-keyfile, then web-login + AWS-WAF token) has been actively blocked by TR and risks an account ban, so automated TR sync was **removed** (no `pytr`/`playwright` dependency). TR data comes from the user's own CSV export, uploaded under Settings. For future automated TR access, the clean path is a **licensed account-aggregation provider** — the same architecture the app already uses for banks (Enable Banking) and that Finanzfluss's Copilot uses for brokers (**wealthAPI**, BaFin-regulated) — not a private-API hack.
+- **Trade Republic via `pytr`** — unofficial; PIN never persisted, device keyfile (gitignored, chmod 600) used for all syncs; rate-limit ~1 req/sec.
 - **Revolut via Salt Edge** — official PSD2 aggregator (free tier); bank login never stored by us; only an opaque connection ID is kept; consent periodically re-authorised.
 - **Market data via FMP (free key) + ECB** — Yahoo/Stooq block datacenter IPs, so quotes use FMP server-side (indices via US-listed ETF proxies); cached in-process and scheduler-warmed. Euro-area yields stay keyless via ECB.

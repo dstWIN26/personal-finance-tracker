@@ -1,7 +1,7 @@
 # Deploying (VPS + Caddy, automatic HTTPS)
 
 This app is a single always-on container: FastAPI + an in-process scheduler +
-SQLite + a Trade Republic keyfile on disk. It runs behind **Caddy**, which gets
+SQLite on disk. It runs behind **Caddy**, which gets
 and renews a Let's Encrypt certificate automatically. Login is a **hardware
 passkey** (Touch ID) after a one-time bootstrap password.
 
@@ -55,14 +55,11 @@ docker compose logs -f caddy   # watch the cert get issued
    - **Lost every passkey?** Re-run step 2 on the server (shell access required)
      to re-enable a bootstrap password — the documented break-glass path.
 
-## 5. Link Trade Republic (and Revolut) — do this after you're logged in
-See **[LINKING.md](LINKING.md)** for the step-by-step pairing flow. In short:
-```bash
-# Log in to Trade Republic once (writes the web session to keys/tr_cookies.txt):
-docker compose run --rm app python -m backend.integrations.tr_setup
-# then set TRADE_REPUBLIC_PHONE in .env, remove the PIN line, and restart:
-docker compose up -d
-```
+## 5. Link accounts — do this after you're logged in
+See **[LINKING.md](LINKING.md)** for the step-by-step flows. In short:
+- **Trade Republic:** no setup — export your transactions CSV from the TR app/web
+  and upload it under **Settings → Trade Republic** (re-import anytime; dupes skipped).
+- **Banks / Revolut:** link via the Enable Banking consent flow from the Settings page.
 
 ## Updating
 ```bash
@@ -72,8 +69,8 @@ The `data/` volume (DB, sessions, enrolled passkeys) and `keys/` persist across
 rebuilds.
 
 ## Backups (do this — it's your only safety net)
-`data/` holds your DB **and enrolled passkeys**; `keys/` holds the Trade Republic
-device credential. Lose the box without a backup and you lose your financial
+`data/` holds your DB **and enrolled passkeys**; `keys/` holds the Enable Banking
+RSA private key. Lose the box without a backup and you lose your financial
 history *and* could be locked out. `scripts/backup.sh` makes an **encrypted**
 snapshot and can ship it off-box.
 
@@ -120,8 +117,10 @@ four things to make that protection real and non-bypassable:
    Rate limiting rules, add e.g. "≤ 20 requests/min/IP to `/auth/*`". This is the
    actual "edge rate-limiting", done at Cloudflare, not in the app.
 
-The app already reads the true client IP from `CF-Connecting-IP` (for lockout +
-login alerts), which is trustworthy precisely because of step 3.
+With step 3 applied (origin locked to Cloudflare), set `TRUST_CF_HEADERS=true` in
+`.env` so the lockout + login alerts key on the real visitor IP from
+`CF-Connecting-IP`. **Without** the firewall, leave it unset (`false`): the app then
+keys the lockout on the TCP peer, so a spoofed `CF-Connecting-IP` cannot bypass it.
 
 > If your record is **DNS-only (grey)**, you have no edge protection — either flip
 > it to Proxied (recommended), or ask for in-app/fail2ban rate-limiting instead.
@@ -139,3 +138,22 @@ login alerts), which is trustworthy precisely because of step 3.
   every sign-in, new passkey enrolment, and account lockout — with the time, IP,
   and device. Best-effort and off the request path; if mail isn't set up it's
   silently skipped.
+
+---
+
+## Alternative: Cloudflare Tunnel (no VPS, no open ports)
+
+Instead of a public VPS you can run the app on your **Mac or a Raspberry Pi** and
+expose it through a **Cloudflare Tunnel** — no port-forwarding, no origin IP, TLS
+handled at Cloudflare's edge. Two helper scripts drive this:
+
+```bash
+./setup-tunnel.sh     # one-time: installs cloudflared, creates the tunnel,
+                      # routes finance.<yourdomain> → localhost, writes cloudflared/config.yml
+./start.sh            # every run: brings up the container + tunnel together (Ctrl-C stops both)
+```
+
+The step-by-step beginner walkthrough (with screenshots-style guidance and the
+Cloudflare dashboard hardening toggles) is in **`FINANCE_TRACKER_SETUP_GUIDE.docx`**.
+Trade-off: the machine must stay on to be reachable. When `TRUST_CF_HEADERS` matters
+here, keep it `false` unless you've locked the tunnel origin to Cloudflare.

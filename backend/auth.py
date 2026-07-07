@@ -16,6 +16,7 @@ server to re-enable the password — this requires shell access to the host.
 """
 import os
 import hashlib
+import ipaddress
 import secrets
 import logging
 import threading
@@ -206,19 +207,42 @@ def _valid_session(token: str | None) -> bool:
     return True
 
 
+def _peer_is_cloudflare(peer: str | None) -> bool:
+    """True if the raw TCP peer is within Cloudflare's published edge ranges."""
+    if not peer:
+        return False
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(ip in net for net in config.CLOUDFLARE_NETS)
+
+
 def _client_ip(request: Request) -> str:
-    # Behind Cloudflare → Caddy, CF-Connecting-IP is the authoritative client IP.
-    # Cloudflare always sets it to the true client; it's trustworthy only when the
-    # origin is firewalled to Cloudflare's ranges (scripts/cloudflare-firewall.sh),
-    # otherwise an attacker hitting the origin directly could spoof it.
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
-    # Otherwise the first X-Forwarded-For hop (set by Caddy).
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "?"
+    """Client IP used for brute-force lockout keying.
+
+    SECURITY: CF-Connecting-IP / X-Forwarded-For are client-supplied and are
+    spoofable if the origin is reachable directly, so they are trusted only per
+    config.TRUST_CF_HEADERS:
+      • "false" (default) — ignore forwarded headers; key on the real TCP peer. A
+        direct-to-origin attacker rotating CF-Connecting-IP can't split attempts
+        across keys, so the per-IP lockout still trips (cannot be bypassed).
+      • "true"  — trust CF-Connecting-IP. Safe ONLY once the origin is locked to
+        Cloudflare (scripts/cloudflare-firewall.sh); otherwise it is spoofable.
+      • "auto"  — trust CF-Connecting-IP only when the TCP peer is itself a
+        published Cloudflare address (uvicorn exposed directly to Cloudflare).
+    """
+    peer = request.client.host if request.client else "?"
+    mode = config.TRUST_CF_HEADERS
+    trust = mode == "true" or (mode == "auto" and _peer_is_cloudflare(peer))
+    if trust:
+        cf = request.headers.get("cf-connecting-ip")
+        if cf:
+            return cf.strip()
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+    return peer
 
 
 # ── Security notifications ────────────────────────────────────────────────────

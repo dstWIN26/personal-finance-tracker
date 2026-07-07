@@ -13,7 +13,6 @@ from backend.database import init_db
 from backend import auth, config, ratelimit, assets
 from backend.routes import spending, portfolio, limits, market, overview, settings, auth as auth_routes
 from backend.alerts import check_and_alert, send_daily_summary, send_weekly_portfolio
-from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
 from backend.integrations.revolut import sync_transactions as sync_revolut_transactions
 from backend.integrations.enable_banking import sync_bank_connections
 from backend.integrations.market import refresh_quotes_cache, refresh_bonds_cache
@@ -26,8 +25,8 @@ init_db()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(sync_portfolio,            "interval", minutes=15)
-    scheduler.add_job(sync_tr_transactions,      "interval", hours=1)
+    # Trade Republic is CSV-import-only (no automated API — TR blocks it and it
+    # risks an account ban), so there are no TR sync jobs here.
     scheduler.add_job(sync_revolut_transactions, "interval", hours=1)
     scheduler.add_job(sync_bank_connections,     "interval", hours=1)
     scheduler.add_job(check_and_alert,           "interval", hours=1)

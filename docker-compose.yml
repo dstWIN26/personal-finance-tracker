@@ -12,11 +12,11 @@ services:
     environment:
       - DB_PATH=/app/data/finance.db
     # This VPS's default Docker bridge has broken IPv6 egress: for dual-stack hosts
-    # (Trade Republic, FMP, ECB) the container tries IPv6 first and the packets
-    # black-hole, so outbound connections HANG (the tr_setup freeze). Disabling IPv6
-    # in the container's netns forces IPv4 — which works fine here (Caddy reaches
-    # Let's Encrypt over IPv4) — and a public resolver avoids host resolv.conf quirks.
-    # This is what lets the scheduled TR/bank syncs + market data reach the internet.
+    # (FMP, ECB, Enable Banking) the container tries IPv6 first and the packets
+    # black-hole, so outbound connections HANG. Disabling IPv6 in the container's
+    # netns forces IPv4 — which works fine here (Caddy reaches Let's Encrypt over
+    # IPv4) — and a public resolver avoids host resolv.conf quirks. This is what
+    # lets the scheduled bank syncs + market data reach the internet.
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -24,7 +24,7 @@ services:
       - net.ipv6.conf.all.disable_ipv6=1
     volumes:
       - ./data:/app/data        # SQLite DB + sessions + auth state (persist!)
-      - ./keys:/app/keys        # credentials: TR web-session cookies + bank RSA key (gitignored)
+      - ./keys:/app/keys        # Enable Banking RSA private key (gitignored, keep private)
     expose:
       - "8000"                  # internal only — never published to the host
     restart: unless-stopped

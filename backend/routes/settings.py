@@ -4,10 +4,11 @@ Two jobs:
   1. Report integration link status WITHOUT ever returning a secret or credential.
   2. Drive the bank-linking consent flow (Enable Banking) and store non-secret prefs.
 
-Trade Republic blocks automated login at its edge (no working unofficial API), so
-instead of pairing we let the user IMPORT their own exported transactions CSV here
-(see import_transactions). The tr_setup.py pairing path is kept but is expected to
-fail against TR's current defenses.
+Trade Republic has no usable automated API (TR blocks unofficial logins and it
+risks an account ban), so TR is CSV-import-only: the user exports their transactions
+from the TR app/web and uploads them here (see import_transactions). Imported rows
+are stored with source="trade_republic" like any other, so the rest of the app
+(overview, spending, portfolio) treats them uniformly.
 """
 import os
 import io
@@ -25,7 +26,6 @@ from pydantic import BaseModel
 
 from backend import alerts
 from backend.integrations import enable_banking
-from backend.integrations.trade_republic import COOKIES_FILE as TR_COOKIES
 from backend.database import (
     connect,
     create_link_state,
@@ -96,12 +96,15 @@ def integrations_status():
                 for a in c.get("accounts", [])
             ],
         })
-    session_present = os.path.exists(TR_COOKIES)
+    with connect() as conn:
+        tr_txns = conn.execute(
+            "SELECT COUNT(*) FROM transactions WHERE source = 'trade_republic'"
+        ).fetchone()[0]
     return {
         "trade_republic": {
-            "phone_set": bool(os.getenv("TRADE_REPUBLIC_PHONE")),
-            "session_present": session_present,
-            "linked": session_present,
+            "import_only": True,          # CSV import only — no automated API
+            "transactions": tr_txns,
+            "linked": tr_txns > 0,        # "linked" == some data has been imported
         },
         "enable_banking": {
             "configured": enable_banking.is_configured(),
@@ -124,14 +127,14 @@ async def sync_now():
     Sources are synced one at a time (SQLite is single-writer) and each is time-
     boxed, so an unconfigured or slow provider can't hang the request. Providers
     that aren't set up degrade to a no-op inside their own sync function.
+
+    Trade Republic is not included: it is CSV-import-only (no automated API), so
+    its data arrives via POST /settings/import/transactions, not a sync job.
     """
-    from backend.integrations.trade_republic import sync_portfolio, sync_tr_transactions
     from backend.integrations.revolut import sync_transactions as sync_revolut
     from backend.integrations.enable_banking import sync_bank_connections as sync_banks
 
     jobs = {
-        "trade_republic_portfolio": sync_portfolio,
-        "trade_republic_transactions": sync_tr_transactions,
         "revolut": sync_revolut,
         "banks": sync_banks,
     }

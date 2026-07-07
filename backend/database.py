@@ -12,7 +12,8 @@ def _ensure_dirs():
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    key_dir = os.path.dirname(os.getenv("TRADE_REPUBLIC_COOKIES_FILE", "keys/tr_cookies.txt"))
+    # keys/ holds the Enable Banking RSA private key; ensure it exists on a fresh deploy.
+    key_dir = os.path.dirname(os.getenv("ENABLE_BANKING_KEYFILE", "keys/enablebanking_private.pem"))
     if key_dir:
         os.makedirs(key_dir, exist_ok=True)
 

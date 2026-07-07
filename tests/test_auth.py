@@ -95,18 +95,54 @@ def test_lockout_emits_single_alert(client, password, captured_alerts):
     assert lock_alerts[0]["warn"] is True
 
 
-def test_client_ip_prefers_cloudflare_header():
+def test_client_ip_trust_modes(monkeypatch):
     from types import SimpleNamespace
 
-    def r(headers):
-        return SimpleNamespace(headers=headers, client=SimpleNamespace(host="5.5.5.5"))
+    def r(headers, peer="5.5.5.5"):
+        return SimpleNamespace(headers=headers, client=SimpleNamespace(host=peer))
 
-    # CF-Connecting-IP wins (authoritative behind Cloudflare).
-    assert auth._client_ip(r({"cf-connecting-ip": "9.9.9.9", "x-forwarded-for": "1.1.1.1"})) == "9.9.9.9"
-    # Else first X-Forwarded-For hop.
+    cf = {"cf-connecting-ip": "9.9.9.9", "x-forwarded-for": "1.1.1.1"}
+
+    # Default (false): forwarded headers ignored — key on the real TCP peer.
+    monkeypatch.setattr(auth.config, "TRUST_CF_HEADERS", "false")
+    assert auth._client_ip(r(cf)) == "5.5.5.5"
+
+    # true: CF-Connecting-IP is authoritative, then first XFF hop, then peer.
+    monkeypatch.setattr(auth.config, "TRUST_CF_HEADERS", "true")
+    assert auth._client_ip(r(cf)) == "9.9.9.9"
     assert auth._client_ip(r({"x-forwarded-for": "1.1.1.1, 2.2.2.2"})) == "1.1.1.1"
-    # Else the socket peer.
     assert auth._client_ip(r({})) == "5.5.5.5"
+
+    # auto: trust CF header only when the peer is itself a Cloudflare address.
+    monkeypatch.setattr(auth.config, "TRUST_CF_HEADERS", "auto")
+    assert auth._client_ip(r(cf, peer="5.5.5.5")) == "5.5.5.5"        # non-CF peer → not trusted
+    assert auth._client_ip(r(cf, peer="173.245.48.1")) == "9.9.9.9"   # CF peer → trusted
+
+
+def test_spoofed_cf_header_cannot_evade_lockout_when_trust_off(client, password, monkeypatch):
+    """A direct-to-origin attacker rotating CF-Connecting-IP must NOT keep the
+    per-IP lockout from tripping (regression for the IP-spoof bypass)."""
+    monkeypatch.setattr(auth.config, "TRUST_CF_HEADERS", "false")
+    for i in range(auth.config.MAX_PW_FAILURES):
+        client.post("/auth/password", json={"password": "nope"},
+                    headers={"cf-connecting-ip": f"10.0.0.{i}"})
+    # Every attempt claimed a different IP, but they share the real peer → locked.
+    assert client.post("/auth/password", json={"password": "nope"},
+                       headers={"cf-connecting-ip": "10.0.0.250"}).status_code == 429
+    # Even a fresh spoofed IP with the CORRECT password is refused while locked.
+    assert client.post("/auth/password", json={"password": password},
+                       headers={"cf-connecting-ip": "10.0.0.251"}).status_code == 429
+
+
+def test_cf_header_trusted_when_enabled(client, password, monkeypatch):
+    """Contrast: with trust ON, distinct CF-Connecting-IPs are distinct keys — which
+    is exactly why TRUST_CF_HEADERS=true is only safe once the origin is firewalled
+    to Cloudflare (scripts/cloudflare-firewall.sh)."""
+    monkeypatch.setattr(auth.config, "TRUST_CF_HEADERS", "true")
+    for i in range(auth.config.MAX_PW_FAILURES + 2):
+        r = client.post("/auth/password", json={"password": "nope"},
+                        headers={"cf-connecting-ip": f"203.0.113.{i}"})
+        assert r.status_code == 401          # each unique IP → lockout never trips
 
 
 def test_passkey_register_requires_session(client):

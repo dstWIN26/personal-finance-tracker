@@ -18,6 +18,10 @@ data/
 backups/
 *.tar.gz.enc
 
+# Cloudflare Tunnel (local config written by setup-tunnel.sh; may contain the
+# tunnel credentials-file path — keep out of git)
+cloudflared/
+
 # Python
 __pycache__/
 *.pyc

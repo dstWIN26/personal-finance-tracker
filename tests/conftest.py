@@ -1,7 +1,7 @@
 """Shared pytest fixtures.
 
 Each test gets a fresh temp SQLite DB and a FastAPI app wired like main.py — but
-without the scheduler / pytr / Salt Edge imports, so the suite runs offline and
+without the scheduler / Salt Edge imports, so the suite runs offline and
 fast. SMTP is stubbed so security alerts are captured, never actually sent.
 """
 from types import SimpleNamespace
